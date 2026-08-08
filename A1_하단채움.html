@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>대전, 생각보다 가깝네? — A1 본문 채움안 v2</title>
+<style>
+:root{
+  /* ---- Figma DDA_design 109:1131 tokens ---- */
+  --bg:#ececec;
+  --green:#2e624c;
+  --green-70:rgba(46,98,76,.7);
+  --green-50:rgba(46,98,76,.5);
+  --green-38:rgba(46,98,76,.38);
+  --green-18:rgba(46,98,76,.18);
+  --orange:#ff8324;
+  --orange-soft:#ff6f44;
+  --orange-dark:#dd7322;
+  --orange-30:rgba(255,131,36,.35);
+
+  --f-head:'KIMM Bold','KIMM_Bold','KIMM',Paperlogy,Pretendard,'Apple SD Gothic Neo',sans-serif;
+  --f-ui:Paperlogy,Pretendard,'Apple SD Gothic Neo','Malgun Gothic',sans-serif;
+  --f-body:'NanumGothic','Nanum Gothic',Pretendard,'Apple SD Gothic Neo',sans-serif;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;background:#5c5c58;}
+
+#bar{position:fixed;z-index:99;left:0;right:0;top:0;height:44px;background:#2b2b28;color:#ddd;
+     display:flex;align-items:center;gap:14px;padding:0 16px;font:13px/1 var(--f-ui);}
+#bar input{width:220px;} #bar b{color:#c7ff00;font-weight:600;}
+#viewport{padding-top:60px;}
+#scaler{transform-origin:top left;width:2339px;}
+
+.poster{position:relative;width:2339px;height:3312px;background:var(--bg);overflow:hidden;
+        font-family:var(--f-ui);color:var(--green);}
+.poster>img.base{position:absolute;left:0;top:0;width:2339px;height:3312px;display:block;}
+
+/* 포스터 자체 그라디언트 재현 — 자리표시 본문을 덮기 위해 */
+.gradpatch{position:absolute;left:0;width:2339px;background-color:var(--bg);
+  background-image:linear-gradient(to bottom,rgba(236,236,236,.2),rgba(199,255,0,.8));
+  background-repeat:no-repeat;background-size:2339px 1338.656px;}
+.flatpatch{position:absolute;background:var(--bg);}
+
+.abs{position:absolute;}
+.rule{position:absolute;height:2px;background:var(--green-18);}
+.srule{position:absolute;height:4px;background:var(--orange-30);}
+
+/* ===== 읽는 순서 앵커 ===== */
+.anchor{position:absolute;display:flex;align-items:center;gap:18px;}
+.anchor .n{width:52px;height:52px;border-radius:50%;background:var(--orange);color:#fff;
+  font-family:var(--f-head);font-size:26px;display:flex;align-items:center;justify-content:center;
+  letter-spacing:0;flex:none;}
+.anchor .q{font-family:var(--f-ui);font-weight:600;font-size:30px;color:var(--green-50);white-space:nowrap;}
+
+.h1{font-family:var(--f-head);letter-spacing:-.03em;line-height:1.28;}
+
+/* ===== 01 하루 타임라인 ===== */
+#b01{left:1356px;top:1640px;width:926px;}
+#b01 .cap{font-size:24px;line-height:1.2;color:var(--green-50);}
+#b01 .rowlab{font-weight:600;font-size:30px;line-height:1;}
+.gantt{position:relative;height:44px;border-radius:4px;background:rgba(46,98,76,.07);overflow:hidden;}
+.gantt i{position:absolute;top:0;height:100%;display:flex;align-items:center;justify-content:center;
+  font-style:normal;font-size:21px;color:#fff;white-space:nowrap;overflow:hidden;}
+#b01 .conv{font-size:26px;line-height:1.2;color:var(--green-70);}
+#b01 .conv b{color:var(--green);font-weight:700;}
+
+/* ===== 02 순환선 ===== */
+#b02{left:58px;top:2176px;width:2224px;}
+#b02 .facts{font-family:var(--f-body);font-size:26px;line-height:1.5;color:var(--green-70);}
+#b02 .facts b{color:var(--orange-dark);font-weight:700;}
+.tl{display:flex;align-items:center;font-size:28px;line-height:1.3;color:var(--green-70);}
+.tl span{white-space:nowrap;} .tl u{flex:1;height:2px;background:var(--green-18);margin:0 18px;text-decoration:none;}
+
+/* ===== 03 근거 3열 ===== */
+.bcol{position:absolute;top:2668px;width:583px;}
+.bcol .k{font-size:26px;line-height:1.25;color:var(--green-50);font-weight:600;}
+.bcol .hero{font-family:var(--f-head);font-size:66px;line-height:1.24;letter-spacing:-.03em;color:var(--orange);margin-top:8px;}
+.bcol .hero small{font-family:var(--f-ui);font-size:32px;font-weight:600;color:var(--green);letter-spacing:0;}
+.bcol .hr{margin-top:12px;height:2px;background:var(--green-18);}
+.bcol .d{margin-top:14px;font-size:25px;line-height:1.4;color:var(--green-70);}
+.bcol .d b{color:var(--green);font-weight:700;}
+.note{position:absolute;font-size:22px;line-height:1.35;color:var(--green-38);}
+
+/* ===== 본문 ===== */
+.intro{position:absolute;font-family:var(--f-body);font-size:32px;line-height:1.45;color:var(--green);}
+.foot{position:absolute;font-family:var(--f-body);font-size:34px;line-height:1.45;color:#1c1c1c;}
+.foot .src{display:block;margin-top:16px;font-size:24px;line-height:1.4;color:rgba(28,28,28,.62);}
+.foot em{font-style:normal;font-family:var(--f-ui);font-weight:700;color:var(--green);}
+</style>
+</head>
+<body>
+
+<div id="bar">
+  <span>배율</span><input id="z" type="range" min="15" max="100" value="30"><b id="zv">30%</b>
+  <span style="opacity:.55">· A1 594×841mm / 2339×3312px · 읽는 순서 01→02→03</span>
+</div>
+
+<div id="viewport"><div id="scaler">
+<div class="poster">
+
+  <img class="base" src="A1.png" alt="대전, 생각보다 가깝네? A1 포스터">
+
+  <!-- ============ 상단 인트로 ============ -->
+  <div class="flatpatch" style="left:970px;top:200px;width:1330px;height:350px;"></div>
+
+  <div class="intro" style="left:993px;top:208px;width:596px;">
+    대전은 지금 도시철도 1호선 하나로 움직입니다. 판암에서 반석까지 20.5km, 도시의 한 방향뿐입니다. 나머지 이동은 도로가 떠맡고, 출퇴근 시간이면 그 도로가 먼저 멈춥니다.
+  </div>
+  <div class="intro" style="left:1646px;top:208px;width:596px;">
+    그래서 거리 대신 시간으로 대전을 다시 그렸습니다. 한 지점에서 같은 시간에 닿는 곳을 이으면 도시는 전혀 다른 모양이 됩니다. 트램이 5개 구를 잇고 나면 이 모양이 어떻게 넓어질까요.
+  </div>
+
+  <!-- ============ 01 · 그래서, 내 하루는? ============ -->
+  <div class="abs" id="b01">
+    <div class="srule" style="left:0;top:0;width:926px;"></div>
+
+    <div class="anchor" style="left:0;top:22px;">
+      <div class="n">01</div><div class="q">그래서, 내 하루는?</div>
+    </div>
+
+    <div class="h1 abs" style="left:0;top:104px;width:926px;font-size:52px;">
+      출근길에서 되찾는 <span style="color:var(--orange);">26분</span>
+    </div>
+
+    <div class="abs cap" style="left:150px;top:190px;">현재 &middot; 기상 06:40 → 도착 08:10</div>
+    <div class="abs rowlab" style="left:0;top:239px;">현재</div>
+    <div class="abs" style="left:150px;top:232px;width:776px;">
+      <div class="gantt">
+        <i style="left:0%;width:22.22%;background:#b9bdb5;">준비 20분</i>
+        <i style="left:22.22%;width:8.89%;background:#a8ada4;">도보</i>
+        <i style="left:31.11%;width:46.67%;background:#4f9273;">버스 42분</i>
+        <i style="left:77.78%;width:8.89%;background:#9aa199;">환승</i>
+        <i style="left:86.67%;width:13.33%;background:#a8ada4;">도보</i>
+      </div>
+    </div>
+
+    <div class="abs cap" style="left:150px;top:300px;">트램 후 &middot; 기상 07:06 → 도착 08:10</div>
+    <div class="abs rowlab" style="left:0;top:349px;">트램 후</div>
+    <div class="abs" style="left:150px;top:342px;width:776px;">
+      <div class="gantt">
+        <i style="left:28.89%;width:22.22%;background:#b9bdb5;">준비 20분</i>
+        <i style="left:51.11%;width:8.89%;background:#a8ada4;">도보</i>
+        <i style="left:60%;width:31.11%;background:var(--orange);">트램 28분</i>
+        <i style="left:91.11%;width:8.89%;background:#a8ada4;">도보</i>
+      </div>
+    </div>
+
+    <div class="abs" style="left:150px;top:398px;font-size:28px;line-height:1.2;color:var(--orange);font-weight:600;">
+      └ 더 잘 수 있는 26분
+    </div>
+
+    <div class="rule" style="left:0;top:444px;width:926px;"></div>
+    <div class="abs conv" style="left:0;top:462px;width:926px;">
+      1년 95시간 = 8시간 수면 <b>11.8일</b> &nbsp;·&nbsp; 2시간 영화 <b>47편</b> &nbsp;·&nbsp; 꼬박 <b>나흘</b>
+    </div>
+  </div>
+
+  <!-- ============ 02 · 무엇이 생기나? ============ -->
+  <div class="abs" id="b02">
+    <div class="srule" style="left:0;top:0;width:2224px;"></div>
+
+    <div class="anchor" style="left:0;top:22px;">
+      <div class="n">02</div><div class="q">무엇이 생기나?</div>
+    </div>
+    <div class="note" style="right:0;top:34px;text-align:right;">
+      정거장 순서를 직선으로 편 모식도 · 시간 눈금은 본선 33.9km ÷ 표정속도 22.06km/h 산출값
+    </div>
+
+    <div class="h1 abs" style="left:0;top:104px;width:2224px;font-size:64px;">
+      5개 구를 한 바퀴로 잇는 순환선 <span style="color:var(--orange);">38.8km · 45개 정거장</span>
+    </div>
+
+    <svg id="ribbon" viewBox="0 0 2224 136" width="2224" height="136"
+         style="position:absolute;left:0;top:206px;"
+         role="img" aria-label="본선 40개와 지선 5개 정거장을 직선으로 편 트램 순환선 모식도">
+      <g id="rb-groups"></g><g id="rb-calls"></g>
+      <line x1="32" y1="76" x2="2192" y2="76" stroke="rgba(46,98,76,.16)" stroke-width="14" stroke-linecap="round"/>
+      <line id="rb-hi" y1="76" y2="76" stroke="#ff8324" stroke-width="14" stroke-linecap="round"/>
+      <g id="rb-dots"></g><g id="rb-ticks"></g>
+    </svg>
+
+    <div class="facts abs" style="left:0;top:356px;width:2224px;">
+      본선 33.9km &middot; 연축지선 3.9km &middot; 진잠지선 1.0km &nbsp;|&nbsp; 차량기지 <b>1개소</b> &nbsp;|&nbsp;
+      완전 무가선 <b>수소연료전지 트램</b> &nbsp;|&nbsp; 표준궤 복선 &nbsp;|&nbsp; 총사업비 <b>1조 5,069억 원</b> &nbsp;|&nbsp; 운영 대전교통공사
+    </div>
+
+    <div class="tl abs" style="left:0;top:406px;width:2224px;">
+      <span>2024. 12 착공</span><u></u>
+      <span>본선 14개 공구 시공 중</span><u></u>
+      <span style="color:var(--orange);font-weight:600;">2030년 하반기 개통 전망</span>
+    </div>
+  </div>
+
+  <!-- ============ 03 · 왜 가까워지나? ============ -->
+  <div class="abs" style="left:58px;top:2640px;width:2224px;">
+    <div class="srule" style="left:0;top:0;width:2224px;"></div>
+  </div>
+  <div class="anchor" style="left:58px;top:2668px;">
+    <div class="n">03</div><div class="q">왜 가까워지나?</div>
+  </div>
+  <div class="abs" style="left:58px;top:2748px;width:400px;font-size:25px;line-height:1.4;color:var(--green-70);">
+    같은 30분에 더 멀리 닿는 이유는<br>세 가지 숫자로 설명됩니다.
+  </div>
+
+  <div class="bcol" style="left:483px;">
+    <div class="k">① 환승 없이</div>
+    <div class="hero">2.9<small>배</small></div>
+    <div class="hr"></div>
+    <div class="d">1호선 20.5km에 트램 38.8km가 더해져 <b>59.3km</b>. 도시를 한 방향이 아니라 한 바퀴로 잇습니다.</div>
+  </div>
+
+  <div class="bcol" style="left:1091px;">
+    <div class="k">② 기다리지 않고</div>
+    <div class="hero">7<small>분</small> 30<small>초</small></div>
+    <div class="hr"></div>
+    <div class="d">첨두시 배차 간격. 평시 10분, 하루 <b>244회</b> 운행 계획으로 시간표가 필요 없습니다.</div>
+  </div>
+
+  <div class="bcol" style="left:1699px;">
+    <div class="k">③ 막히지 않고</div>
+    <div class="hero">22.06<small>km/h</small></div>
+    <div class="hr"></div>
+    <div class="d">전용 궤도와 <b>트램 우선 신호</b>로 확보한 표정속도. 가장 빠르지 않아도 가장 예측 가능합니다.</div>
+  </div>
+
+  <!-- ============ 하단 2단 본문 ============ -->
+  <div class="gradpatch" style="top:2926px;height:386px;background-position:0 -949.42px;"></div>
+
+  <div class="foot" style="left:79px;top:2952px;width:1077px;">
+    <em>이 지도를 읽는 법.</em> 거리가 아니라 시간으로 그린 지도입니다. 정부청사에서 같은 시간에 닿는 지점을 이은 선이 등시선이며, 초록은 현재·오렌지는 트램 도입 이후입니다.
+    <span class="src">등시선·소요시간 산출 — 국가교통DB(KTDB) 통근 OD, 대전 도시철도 2호선 기본계획 통행시간 예측치</span>
+  </div>
+
+  <div class="foot" style="left:1203px;top:2952px;width:1068px;">
+    <em>전제와 한계.</em> 첨두시 07–09시 기준이며 도보 접근·대기·환승 시간을 포함합니다. 연 95시간은 통근 1일 왕복, 연 240일 기준으로 환산했습니다.
+    <span class="src">개통 시기·사업비는 2026년 6월 대전시 발표 기준이며 통합공정계획 확정에 따라 달라질 수 있습니다.</span>
+  </div>
+
+</div>
+</div></div>
+
+<script>
+(function(){
+  var z=document.getElementById('z'),zv=document.getElementById('zv'),
+      sc=document.getElementById('scaler'),vp=document.getElementById('viewport');
+  function apply(){var s=z.value/100;sc.style.transform='scale('+s+')';zv.textContent=z.value+'%';
+    vp.style.height=(3312*s+80)+'px';vp.style.width=(2339*s)+'px';vp.style.margin='0 auto';}
+  z.addEventListener('input',apply);apply();
+
+  /* ---------- 02 : 순환선 리본 ---------- */
+  var NS='http://www.w3.org/2000/svg',svg=document.getElementById('ribbon');
+  var gG=svg.querySelector('#rb-groups'),gDot=svg.querySelector('#rb-dots'),
+      gCall=svg.querySelector('#rb-calls'),gTick=svg.querySelector('#rb-ticks');
+  var N=45,X0=32,X1=2192,Y=76,UI='Paperlogy,Pretendard,sans-serif';
+  function el(t,a){var e=document.createElementNS(NS,t);for(var k in a)e.setAttribute(k,a[k]);return e;}
+  function px(i){return X0+(X1-X0)*i/(N-1);}
+
+  /* 본선 40 / 연축지선 4 / 진잠지선 1 */
+  var groups=[{n:'본선 40개소',s:0,e:39,c:'#2e624c'},
+              {n:'연축지선 4',s:40,e:43,c:'#4a8a6c'},
+              {n:'진잠지선 1',s:44,e:44,c:'#6ab68f'}];
+  groups.forEach(function(g){
+    gG.appendChild(el('rect',{x:px(g.s),y:20,width:Math.max(px(g.e)-px(g.s),6),height:4,fill:g.c}));
+  });
+  var t0=el('text',{x:px(0),y:12,'font-size':23,fill:'#2e624c','font-weight':700,'font-family':UI});
+  t0.textContent='본선 40개소';gG.appendChild(t0);
+  var t1=el('text',{x:px(N-1),y:12,'font-size':23,fill:'#4a8a6c','font-weight':700,
+    'font-family':UI,'text-anchor':'end'});
+  t1.textContent='지선 5개소 (연축 4 · 진잠 1)';gG.appendChild(t1);
+
+  var HI_A=6,HI_B=19,hi=svg.querySelector('#rb-hi');
+  hi.setAttribute('x1',px(HI_A));hi.setAttribute('x2',px(HI_B));
+
+  for(var i=0;i<N;i++){
+    var isHi=(i===HI_A||i===HI_B),c=i<40?'#2e624c':(i<44?'#4a8a6c':'#6ab68f');
+    gDot.appendChild(el('circle',{cx:px(i),cy:Y,r:isHi?15:7,
+      fill:isHi?'#ff8324':c,stroke:isHi?'#ececec':'none','stroke-width':isHi?5:0}));
+  }
+  [[HI_A,'관저동'],[HI_B,'정부청사']].forEach(function(p){
+    var x=px(p[0]);
+    gCall.appendChild(el('line',{x1:x,y1:56,x2:x,y2:70,stroke:'#ff8324','stroke-width':2}));
+    var t=el('text',{x:x,y:48,'font-size':27,fill:'#ff8324','font-weight':700,
+      'text-anchor':'middle','font-family':UI});
+    t.textContent=p[1];gCall.appendChild(t);
+  });
+
+  /* 시간 눈금 : 본선 33.9km ÷ 표정속도 22.06km/h ≒ 92분 */
+  var MX0=px(0),MX1=px(39);
+  [0,20,40,60,80,92].forEach(function(m){
+    var x=MX0+(MX1-MX0)*(m/92);
+    gTick.appendChild(el('line',{x1:x,y1:94,x2:x,y2:102,stroke:'rgba(46,98,76,.3)','stroke-width':2}));
+    var t=el('text',{x:x,y:126,'font-size':24,fill:'rgba(46,98,76,.55)','text-anchor':'middle','font-family':UI});
+    t.textContent=m+'분';gTick.appendChild(t);
+  });
+  var lab=el('text',{x:MX1+52,y:126,'font-size':22,fill:'rgba(46,98,76,.42)','font-family':UI});
+  lab.textContent='← 본선 순환 1주';
+  gTick.appendChild(lab);
+})();
+</script>
+</body>
+</html>

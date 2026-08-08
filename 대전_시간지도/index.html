@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#ececec">
+<title>대전, 생각보다 가깝네? — 시간 지도</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body data-view="geo">
+<div id="app">
+  <canvas id="stage"></canvas>
+
+  <div id="railL">
+    <header id="head">
+      <h1>대전,<br>생각보다 <em>가깝네?</em></h1>
+      <p>거리가 아니라 <strong>이동 시간</strong>으로 그린 대전입니다. 출발 정거장을 고르고
+         현재와 트램 도입 후를 바꿔 보세요. 도시가 얼마나 줄어드는지 보입니다.</p>
+    </header>
+
+    <div id="origin">
+      <div class="lab">출발지</div>
+      <div class="big" id="originName">정부청사</div>
+      <div class="sub" id="originLine">1호선</div>
+      <select id="originPick" aria-label="출발지 선택"></select>
+    </div>
+
+    <div id="ctl">
+      <div class="seg" role="tablist">
+        <button data-mode="geo">지리 지도</button>
+        <button data-mode="now">시간 · 현재</button>
+        <button data-mode="tram" class="on">시간 · 트램 후</button>
+        <button data-mode="diff">단축 시간</button>
+      </div>
+      <div id="ghostNote">점선 = 현재 시간지도 · 면 = 트램 후</div>
+      <div id="hint">정거장 클릭해 출발지 변경 · 스크롤 확대 · 드래그 이동 · 더블클릭 원위치</div>
+    </div>
+  </div>
+
+  <button id="sheetBtn" type="button">숫자 보기 ↑</button>
+
+  <aside id="railR">
+    <button id="sheetClose" type="button" aria-label="닫기">×</button>
+
+    <div class="card" id="reachCard">
+      <h3>30분 안에 닿는 대전</h3>
+      <div class="kpi">
+        <span class="v now" id="a30n">—</span><span class="arrow">→</span>
+        <span class="v tram" id="a30t">—</span><span class="u">km²</span>
+      </div>
+      <span class="gain" id="a30g">—</span>
+      <div class="foot-line">45분 기준 <b id="a45n">—</b> → <b class="o" id="a45t">—</b> km²</div>
+    </div>
+
+    <div class="card" id="cutCard">
+      <h3>트램이 줄이는 시간</h3>
+      <div class="kpi">
+        <span class="v tram" id="cutArea">—</span><span class="u">km²</span>
+        <span style="flex:1"></span>
+        <span class="v tram" id="cutMax">—</span><span class="u">분 최대</span>
+      </div>
+      <div class="foot-line">시간이 줄어드는 지역 면적과, 가장 크게 줄어드는 지점의 단축 폭</div>
+    </div>
+
+    <div class="card">
+      <h3>주요 목적지까지</h3>
+      <table>
+        <thead><tr><th>목적지</th><th>현재</th><th>트램 후</th><th>단축</th></tr></thead>
+        <tbody id="odBody"></tbody>
+      </table>
+    </div>
+
+    <div id="legend">
+      <div class="row"><span class="sw" style="background:#c7ff00"></span> 현재 시간지도</div>
+      <div class="row"><span class="sw" style="background:#ff8324"></span> 트램 도입 후 시간지도</div>
+      <div class="row"><span class="dash"></span> 대비되는 시나리오의 외곽선</div>
+      <div class="row" id="diffLegend"><span class="sw" style="background:#c7ff00"></span>
+        <span class="sw" style="background:#ffb43a"></span>
+        <span class="sw" style="background:#ff6a00"></span> 단축 10 · 20 · 30분↑</div>
+      <div class="note">
+        원 = 출발지에서 15 · 30 · 45 · 60 · 75분. 방향은 실제 방위, 반지름은 소요시간입니다.
+        가까운 곳이 뭉치지 않도록 반지름에 0.68제곱 스케일을 썼고, 90분을 넘으면 테두리에 고정됩니다.
+        노선은 정거장을 순서대로 잇는 스플라인으로 그려 왜곡해도 꺾이지 않습니다(선형은 단순화됨).<br>
+        <b>모델</b> · 직선거리에 우회계수 1.3 · 도보 4.55km/h ·
+        시내버스 접근·대기 10분 + 표정속도 16km/h + 5km 초과 시 환승 7분 ·
+        1호선 표정속도 33.5km/h(20.5km, 대기 4분) ·
+        트램 표정속도 22.06km/h(본선 33.9km · 45개 정거장 · 대기 3.75분 = 첨두 배차 7분 30초의 절반) ·
+        환승 도보 2분 + 거리.<br>
+        트램·1호선 제원은 공표 수치이고, <b>버스·도보 계수는 비교를 위한 가정</b>입니다.
+        지오메트리는 OpenStreetMap(ODbL 1.0) 기반, 개통 시기는 2026년 6월 대전시 발표(2030년 하반기) 기준.
+      </div>
+    </div>
+  </aside>
+
+  <div id="tip" hidden></div>
+</div>
+
+<script src="data/daejeon.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

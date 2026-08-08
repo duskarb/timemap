@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#ececec">
+<title>대전, 생각보다 가깝네? — 시간 지도</title>
+<style>
+:root{
+  --bg:#ececec; --green:#2e624c; --green-70:rgba(46,98,76,.7); --green-50:rgba(46,98,76,.5);
+  --green-18:rgba(46,98,76,.18); --lime:#c7ff00; --orange:#ff8324; --orange-dark:#dd7322;
+  --rail-l:420px; --rail-r:372px; --pad:36px;
+  --f-head:'KIMM Bold','KIMM_Bold',Paperlogy,Pretendard,'Apple SD Gothic Neo',sans-serif;
+  --f-ui:Paperlogy,Pretendard,'Apple SD Gothic Neo','Malgun Gothic',sans-serif;
+  --safe-b:env(safe-area-inset-bottom,0px);
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--green);
+  font-family:var(--f-ui);-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%}
+#app{position:fixed;inset:0}
+#stage{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab;touch-action:none}
+
+/* ============ 좌측 레일 ============ */
+#railL{position:absolute;left:var(--pad);top:var(--pad);bottom:var(--pad);
+  width:calc(var(--rail-l) - var(--pad) - 24px);display:flex;flex-direction:column;
+  gap:22px;pointer-events:none;z-index:3}
+#railL>*{pointer-events:auto}
+#head h1{font-family:var(--f-head);font-size:clamp(28px,3.1vw,46px);line-height:1.12;margin:0 0 10px;letter-spacing:-.03em}
+#head h1 em{font-style:normal;color:var(--orange)}
+#head p{margin:0;font-size:14.5px;line-height:1.6;color:var(--green-70)}
+#origin .lab{font-size:11.5px;letter-spacing:.06em;color:var(--green-50);font-weight:600;margin-bottom:6px}
+#origin .big{font-family:var(--f-head);font-size:30px;line-height:1.1;letter-spacing:-.02em}
+#origin .sub{font-size:12.5px;color:var(--green-50);margin-top:2px}
+#originPick{margin-top:12px;appearance:none;border:1.5px solid var(--green-18);
+  background:rgba(255,255,255,.72) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='7'><path d='M1 1l4 4 4-4' fill='none' stroke='%232e624c' stroke-width='1.6'/></svg>") right 12px center/10px no-repeat;
+  color:var(--green);font:600 13px var(--f-ui);padding:9px 30px 9px 12px;border-radius:9px;cursor:pointer;width:100%;max-width:230px}
+#ctl{margin-top:auto;display:flex;flex-direction:column;gap:11px}
+.seg{display:inline-flex;background:rgba(46,98,76,.09);border-radius:999px;padding:4px;gap:2px;flex-wrap:wrap}
+.seg button{appearance:none;border:0;background:transparent;color:var(--green-70);
+  font:600 13px var(--f-ui);padding:9px 15px;border-radius:999px;cursor:pointer;transition:.18s;white-space:nowrap}
+.seg button:hover{color:var(--green)}
+.seg button.on{background:var(--green);color:#fff}
+.seg button[data-mode="tram"].on{background:var(--orange)}
+#ghostNote{font-size:12.5px;color:var(--green-50)}
+#hint{font-size:11.5px;color:var(--green-50);opacity:.85}
+
+/* ============ 우측 레일 ============ */
+#railR{position:absolute;right:var(--pad);top:var(--pad);bottom:var(--pad);
+  width:calc(var(--rail-r) - var(--pad) - 24px);display:flex;flex-direction:column;gap:16px;
+  overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;z-index:3;padding-right:2px}
+#railR::-webkit-scrollbar{width:5px}
+#railR::-webkit-scrollbar-thumb{background:var(--green-18);border-radius:3px}
+.card{background:rgba(255,255,255,.78);border:1.5px solid var(--green-18);border-radius:13px;
+  padding:16px 18px;flex:none}
+.card h3{margin:0 0 12px;font:600 11.5px var(--f-ui);letter-spacing:.05em;color:var(--green-50)}
+.kpi{display:flex;align-items:flex-end;gap:9px;flex-wrap:wrap}
+.kpi .v{font-family:var(--f-head);font-size:38px;line-height:1;letter-spacing:-.03em}
+.kpi .v.now{color:var(--green)} .kpi .v.tram{color:var(--orange)}
+.kpi .arrow{font-size:20px;color:var(--green-50);padding-bottom:3px}
+.kpi .u{font-size:13px;font-weight:600;padding-bottom:3px;color:var(--green-70)}
+.gain{margin-top:9px;display:inline-block;background:var(--orange);color:#fff;font:700 12px var(--f-ui);
+  padding:3px 9px;border-radius:999px}
+.foot-line{margin-top:11px;font-size:12px;color:var(--green-50);border-top:1px solid var(--green-18);padding-top:9px;line-height:1.5}
+.foot-line b{color:var(--green)} .foot-line b.o{color:var(--orange-dark)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{font:600 11px var(--f-ui);color:var(--green-50);text-align:right;padding:0 0 7px;letter-spacing:.03em}
+th:first-child{text-align:left}
+td{padding:6px 0;border-top:1px solid var(--green-18);text-align:right;font-variant-numeric:tabular-nums}
+td:first-child{text-align:left;color:var(--green-70)}
+td.o{color:var(--orange-dark);font-weight:700}
+td.cut{color:var(--orange);font-weight:700} td.flat{color:var(--green-50)}
+
+#legend{font-size:11.5px;color:var(--green-50);line-height:1.6}
+#legend .row{display:flex;align-items:center;gap:8px;margin-bottom:6px;color:var(--green-70);font-size:12px}
+#legend .sw{width:20px;height:9px;border-radius:2px;flex:none}
+#legend .dash{width:20px;border-top:2px dashed var(--green-50);flex:none}
+#legend .note{margin-top:9px;border-top:1px solid var(--green-18);padding-top:9px}
+#diffLegend{display:none} body[data-view="diff"] #diffLegend{display:flex}
+#cutCard{display:none} body[data-view="diff"] #cutCard{display:block}
+body[data-view="diff"] #reachCard{opacity:.5}
+
+#tip{position:fixed;transform:translate(-50%,calc(-100% - 14px));background:rgba(46,98,76,.95);color:#fff;
+  border-radius:9px;padding:8px 12px;pointer-events:none;white-space:nowrap;font-size:12px;z-index:9;
+  display:flex;flex-direction:column;gap:2px;max-width:70vw}
+#tip b{font-size:13.5px} #tip span{opacity:.75} #tip .t{opacity:1}
+#tip em{font-style:normal;font-weight:700} #tip em.o{color:var(--lime)}
+
+#sheetBtn{display:none}
+
+/* ============ 태블릿 ============ */
+@media (max-width:1240px){
+  :root{--rail-l:320px;--rail-r:300px;--pad:22px}
+  #head p{font-size:13px} .kpi .v{font-size:32px}
+}
+
+/* ============ 모바일 ============ */
+@media (max-width:820px){
+  :root{--pad:16px}
+  #railL{left:0;right:0;top:0;bottom:auto;width:auto;padding:16px 16px 0;gap:12px}
+  #head h1{font-size:27px;margin-bottom:6px}
+  #head p{display:none}
+  #origin{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  #origin .lab{display:none} #origin .big{font-size:22px} #origin .sub{margin:0;font-size:12px}
+  #originPick{margin-top:0;width:auto;max-width:none;flex:1;min-width:130px;padding:7px 28px 7px 10px;font-size:12.5px}
+  #ctl{position:fixed;left:0;right:0;bottom:0;margin:0;
+    padding:12px 16px calc(12px + var(--safe-b));gap:8px;
+    background:linear-gradient(to top,var(--bg) 62%,rgba(236,236,236,0));z-index:4}
+  .seg{overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;max-width:100%}
+  .seg::-webkit-scrollbar{display:none}
+  .seg button{padding:10px 14px;font-size:13px}
+  #hint{display:none}
+  #ghostNote{font-size:12px}
+
+  /* 통계 = 하단 시트 */
+  #railR{left:0;right:0;top:auto;bottom:0;width:auto;max-height:74vh;
+    background:var(--bg);border-top:1.5px solid var(--green-18);border-radius:16px 16px 0 0;
+    padding:8px 16px calc(20px + var(--safe-b));gap:12px;
+    transform:translateY(101%);transition:transform .3s cubic-bezier(.4,0,.2,1);z-index:6;
+    box-shadow:0 -14px 34px rgba(46,98,76,.14)}
+  body[data-sheet="1"] #railR{transform:none}
+  #railR::before{content:'';display:block;width:38px;height:4px;border-radius:2px;
+    background:var(--green-18);margin:2px auto 6px;flex:none}
+  .card{padding:14px 15px}
+  #sheetBtn{display:flex;position:fixed;right:16px;bottom:calc(96px + var(--safe-b));z-index:5;
+    align-items:center;gap:7px;appearance:none;border:1.5px solid var(--green-18);
+    background:rgba(255,255,255,.9);color:var(--green);font:700 12.5px var(--f-ui);
+    padding:10px 15px;border-radius:999px;cursor:pointer;box-shadow:0 6px 18px rgba(46,98,76,.12)}
+  body[data-sheet="1"] #sheetBtn{opacity:0;pointer-events:none}
+  #sheetClose{display:block;position:absolute;right:14px;top:12px;appearance:none;border:0;
+    background:transparent;color:var(--green-50);font:700 20px var(--f-ui);cursor:pointer;line-height:1}
+  #tip{font-size:11.5px;padding:7px 10px}
+}
+@media (min-width:821px){#sheetClose{display:none}}
+@media (max-width:400px){ #head h1{font-size:23px} }
+</style>
+</head>
+<body data-view="geo">
+<div id="app">
+  <canvas id="stage"></canvas>
+
+  <div id="railL">
+    <header id="head">
+      <h1>대전,<br>생각보다 <em>가깝네?</em></h1>
+      <p>거리가 아니라 <strong>이동 시간</strong>으로 그린 대전입니다. 출발 정거장을 고르고
+         현재와 트램 도입 후를 바꿔 보세요. 도시가 얼마나 줄어드는지 보입니다.</p>
+    </header>
+
+    <div id="origin">
+      <div class="lab">출발지</div>
+      <div class="big" id="originName">정부청사</div>
+      <div class="sub" id="originLine">1호선</div>
+      <select id="originPick" aria-label="출발지 선택"></select>
+    </div>
+
+    <div id="ctl">
+      <div class="seg" role="tablist">
+        <button data-mode="geo">지리 지도</button>
+        <button data-mode="now">시간 · 현재</button>
+        <button data-mode="tram" class="on">시간 · 트램 후</button>
+        <button data-mode="diff">단축 시간</button>
+      </div>
+      <div id="ghostNote">점선 = 현재 시간지도 · 면 = 트램 후</div>
+      <div id="hint">정거장 클릭해 출발지 변경 · 스크롤 확대 · 드래그 이동 · 더블클릭 원위치</div>
+    </div>
+  </div>
+
+  <button id="sheetBtn" type="button">숫자 보기 ↑</button>
+
+  <aside id="railR">
+    <button id="sheetClose" type="button" aria-label="닫기">×</button>
+
+    <div class="card" id="reachCard">
+      <h3>30분 안에 닿는 대전</h3>
+      <div class="kpi">
+        <span class="v now" id="a30n">—</span><span class="arrow">→</span>
+        <span class="v tram" id="a30t">—</span><span class="u">km²</span>
+      </div>
+      <span class="gain" id="a30g">—</span>
+      <div class="foot-line">45분 기준 <b id="a45n">—</b> → <b class="o" id="a45t">—</b> km²</div>
+    </div>
+
+    <div class="card" id="cutCard">
+      <h3>트램이 줄이는 시간</h3>
+      <div class="kpi">
+        <span class="v tram" id="cutArea">—</span><span class="u">km²</span>
+        <span style="flex:1"></span>
+        <span class="v tram" id="cutMax">—</span><span class="u">분 최대</span>
+      </div>
+      <div class="foot-line">시간이 줄어드는 지역 면적과, 가장 크게 줄어드는 지점의 단축 폭</div>
+    </div>
+
+    <div class="card">
+      <h3>주요 목적지까지</h3>
+      <table>
+        <thead><tr><th>목적지</th><th>현재</th><th>트램 후</th><th>단축</th></tr></thead>
+        <tbody id="odBody"></tbody>
+      </table>
+    </div>
+
+    <div id="legend">
+      <div class="row"><span class="sw" style="background:#c7ff00"></span> 현재 시간지도</div>
+      <div class="row"><span class="sw" style="background:#ff8324"></span> 트램 도입 후 시간지도</div>
+      <div class="row"><span class="dash"></span> 대비되는 시나리오의 외곽선</div>
+      <div class="row" id="diffLegend"><span class="sw" style="background:#c7ff00"></span>
+        <span class="sw" style="background:#ffb43a"></span>
+        <span class="sw" style="background:#ff6a00"></span> 단축 10 · 20 · 30분↑</div>
+      <div class="note">
+        원 = 출발지에서 15 · 30 · 45 · 60 · 75분. 방향은 실제 방위, 반지름은 소요시간입니다.
+        가까운 곳이 뭉치지 않도록 반지름에 0.68제곱 스케일을 썼고, 90분을 넘으면 테두리에 고정됩니다.
+        노선은 정거장을 순서대로 잇는 스플라인으로 그려 왜곡해도 꺾이지 않습니다(선형은 단순화됨).<br>
+        <b>모델</b> · 직선거리에 우회계수 1.3 · 도보 4.55km/h ·
+        시내버스 접근·대기 10분 + 표정속도 16km/h + 5km 초과 시 환승 7분 ·
+        1호선 표정속도 33.5km/h(20.5km, 대기 4분) ·
+        트램 표정속도 22.06km/h(본선 33.9km · 45개 정거장 · 대기 3.75분 = 첨두 배차 7분 30초의 절반) ·
+        환승 도보 2분 + 거리.<br>
+        트램·1호선 제원은 공표 수치이고, <b>버스·도보 계수는 비교를 위한 가정</b>입니다.
+        지오메트리는 OpenStreetMap(ODbL 1.0) 기반, 개통 시기는 2026년 6월 대전시 발표(2030년 하반기) 기준.
+      </div>
+    </div>
+  </aside>
+
+  <div id="tip" hidden></div>
+</div>
+
+<script>window.__DAEJEON__=/*DATA*/null/*DATA*/;</script>
+<script>/*APP*/</script>
+</body>
+</html>

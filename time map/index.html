@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>시간 지도 — 서울을 이동시간으로 다시 그리다</title>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="stage"></canvas>
+
+      <header id="intro">
+        <h1>시간 지도</h1>
+        <p>서울을 거리가 아니라 <em>대중교통으로 걸리는 시간</em>으로 다시 그립니다.</p>
+      </header>
+
+      <div id="hud">
+        <div id="origin-label">출발: <strong>—</strong></div>
+        <div id="mode-row">
+          <button id="toggle" type="button">시간 지도로 보기</button>
+          <span id="hint">역을 클릭해 출발지 지정 · 스크롤 확대 · 드래그 이동</span>
+        </div>
+      </div>
+
+      <div id="legend"></div>
+      <div id="tooltip" hidden></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
