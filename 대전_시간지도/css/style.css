@@ -80,6 +80,10 @@ body[data-view="diff"] #reachCard{opacity:.5}
   display:flex;flex-direction:column;gap:2px;max-width:70vw}
 #tip b{font-size:13.5px} #tip span{opacity:.75} #tip .t{opacity:1}
 #tip em{font-style:normal;font-weight:700} #tip em.o{color:var(--lime)}
+#tip em.cut{color:var(--orange);margin-left:4px}
+/* #tip 의 display:flex 가 UA 의 [hidden]{display:none} 를 이겨서, 한 번 뜬 툴팁이
+   호버를 벗어나도 사라지지 않았다. 명시적으로 되돌린다. */
+#tip[hidden]{display:none}
 
 #sheetBtn{display:none}
 
