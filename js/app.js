@@ -1,80 +1,31 @@
 /* =========================================================================
-   대전 시간지도 — time map 프로젝트(Dijkstra + geo↔time 모프)를 대전 트램에 적용
+   대전 시간지도 — geo↔time 모프 렌더러
+
+   소요시간은 브라우저에서 계산하지 않는다. data/daejeon.js 에 실린 r5py 통행시간
+   행렬(GTFS: TAGO 노선 + 운송사업조합 시간표 + 1호선 + 트램)을 조회할 뿐이다.
+   행렬은 출발지 62개 × 도착지 2204개(격자 2142 + 정거장 62)의 uint8 분값이고,
+   255 는 CAP 분 안에 닿지 못한다는 뜻이다.
    ========================================================================= */
 const D = window.__DAEJEON__;
 const KX = 111.32 * Math.cos(36.363 * Math.PI / 180), KY = 110.574;
 const km = (a, b, c, d) => Math.hypot((a - c) * KX, (b - d) * KY);
-const DET = 1.3;                                  // 직선거리 → 실제 경로 우회계수
-const WALK = D.walkMinPerKm * DET;                // 도보 4.55km/h
-const busMin = d => 10 + d * DET * 3.75 + (d > 5 ? 7 : 0);  // 접근4+대기6 · 16km/h · 5km↑ 환승 7분
-const CAP = 90;                                   // 시간지도 반경 상한(분)
-const RINGS = [15, 30, 45, 60, 75];
-let useBus = true;
-const access = d => useBus ? Math.min(d * WALK, busMin(d)) : d * WALK;
+const CAP = D.cap;                          // 시간지도 반경 상한(분) = 행렬의 max_time
+const RINGS = [30, 60, 90, 120, 150];
 const easeInOut = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 
-/* ---------- 정거장 · 그래프 ---------- */
-const ALL = [...D.metro, ...D.tram];
-const byId = new Map(ALL.map(s => [s.id, s]));
-function adj(useTram) {
-  const m = new Map();
-  for (const [a, b, w, k] of D.edges) {
-    if (!useTram && k !== 'm1') continue;
-    if (!m.has(a)) m.set(a, []); if (!m.has(b)) m.set(b, []);
-    m.get(a).push([b, w]); m.get(b).push([a, w]);
-  }
-  return m;
+/* ---------- 통행시간 행렬 ---------- */
+const STRIDE = D.stride, NC = D.nCells;
+function unb64(s) {
+  const bin = atob(s), a = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+  return a;
 }
-const ADJ = { now: adj(false), tram: adj(true) };
+const TTM = { now: unb64(D.ttm.before), tram: unb64(D.ttm.after) };
+const raw = (scen, o, col) => TTM[scen][o * STRIDE + col];
+/** 출발지 행 × 도착지 열의 소요시간(분). 미도달(255)은 CAP 으로 접는다. */
+const tt = (scen, o, col) => { const v = raw(scen, o, col); return v === 255 ? CAP : v; };
 
-/** 출발점(lon,lat)에서 모든 정거장까지의 도착시각(분). 다중 시드 다익스트라. */
-function arriveTimes(o, scen) {
-  const use = scen === 'tram';
-  const dist = new Map(); const heap = [];
-  const push = (id, d) => { heap.push([d, id]); let i = heap.length - 1;
-    while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break;
-      [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
-  for (const s of ALL) {
-    if (!use && s.line === '트램') continue;
-    const d = km(o.lon, o.lat, s.lon, s.lat);
-    if (d > 12) continue;
-    const wait = s.line === '트램' ? D.headway.tram / 2 : D.headway.m1 / 2;
-    const t = access(d) + wait;
-    if (t < 100) { dist.set(s.id, t); push(s.id, t); }
-  }
-  const A = ADJ[scen];
-  while (heap.length) {
-    const top = heap[0]; const last = heap.pop();
-    if (heap.length) { heap[0] = last; let i = 0;
-      for (;;) { const l = 2 * i + 1, r = l + 1; let m = i;
-        if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
-        if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
-        if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } }
-    const [d, id] = top;
-    if (d > (dist.get(id) ?? Infinity)) continue;
-    for (const [to, w] of A.get(id) ?? []) {
-      const nd = d + w;
-      if (nd < (dist.get(to) ?? Infinity)) { dist.set(to, nd); push(to, nd); }
-    }
-  }
-  return dist;
-}
-
-/** 임의 지점까지의 소요시간(분) = min(도보, 버스, 철도+하차도보) */
-function makeModel(o, arrive) {
-  const st = [];
-  for (const [id, t] of arrive) { const s = byId.get(id); st.push([s.lon, s.lat, t]); }
-  return (lon, lat) => {
-    const d = km(o.lon, o.lat, lon, lat);
-    let best = access(d);
-    for (let i = 0; i < st.length; i++) {
-      const t = st[i][2]; if (t >= best) continue;
-      const e = km(st[i][0], st[i][1], lon, lat) * WALK;
-      if (t + e < best) best = t + e;
-    }
-    return best;
-  };
-}
+const ALL = D.stations;                     // 1호선 22 + 트램 45, 환승역 5쌍 병합 → 62
 
 /* ---------- 좌표계 ---------- */
 const cvs = document.getElementById('stage'), ctx = cvs.getContext('2d');
@@ -117,8 +68,11 @@ function timePos(lon, lat, minutes, o) {
   return { x: BOX.cx + r * Math.cos(th), y: BOX.cy - r * Math.sin(th) };
 }
 
-/* ---------- 지오메트리 평탄화 ---------- */
-const FEAT = [];   // {key, closed, idx:[start,len]}
+/* ---------- 지오메트리 평탄화 ----------
+   PTS 순서는 daejeon.js 의 nearCell 배열과 맞춘다: 시 경계 → 구 경계 → 구 라벨 →
+   정거장. 앞의 세 묶음은 가장 가까운 격자셀 KNN 개를 역거리로 섞어 쓰고, 정거장은
+   행렬에 자기 열이 있으므로 NC + 인덱스로 바로 찾는다. */
+const FEAT = [];   // {key, closed, s:start, n:len}
 const PTS = [];    // [lon,lat]
 function addSet(key, arr) {
   for (const [pts, closed] of arr) {
@@ -126,38 +80,32 @@ function addSet(key, arr) {
     for (const p of pts) PTS.push(p);
   }
 }
-addSet('city', D.city); addSet('gu', D.gu);   // 노선은 ROUTES(정거장 시퀀스)로 그린다
-const NODE_S = PTS.length;
-for (const s of ALL) PTS.push([s.lon, s.lat]);
-const LM_S = PTS.length;
-for (const l of D.landmarks) PTS.push([l.lon, l.lat]);
+addSet('city', D.city); addSet('gu', D.gu);   // 노선은 D.routes(정거장 시퀀스)로 그린다
 const GU_S = PTS.length;
 for (const g of D.guLabels) PTS.push([g.lon, g.lat]);
+const NODE_S = PTS.length;
+for (const s of ALL) PTS.push([s.lon, s.lat]);
 const N = PTS.length;
 
-/* ---------- 노선 = 정거장 시퀀스 ----------
-   OSM 폴리라인을 정점마다 따로 왜곡하면 시간지도에서 방위가 튀어 지그재그가 생긴다.
-   노선을 '정거장을 순서대로 잇는 곡선'으로 다시 정의하면 어떤 왜곡에서도 매끄럽다.
-   (미세한 선형은 잃지만 정거장 위치·순서·연결은 정확하다) */
-const TI = new Map(D.tram.map((t, i) => [t.code, 22 + i]));   // 트램 코드 → ALL 인덱스
-const ROUTES = [
-  { kind: 'm1',   closed: false, idx: D.metro.map((_, i) => i) },
-  { kind: 'tram', closed: true,  idx: Array.from({ length: 40 }, (_, i) => TI.get(201 + i)) },
-  { kind: 'tram', closed: false, idx: [TI.get(212), TI.get(241), TI.get(242), TI.get(243), TI.get(244)] },
-  { kind: 'tram', closed: false, idx: [TI.get(233), TI.get(245)] },
-].map(r => ({ ...r, idx: r.idx.filter(v => v !== undefined) }));
+/** 격자에서 빌려 오는 정점의 소요시간(분). 이웃 KNN 셀의 역거리 가중 평균. */
+const KNN = D.knn;
+function borrowed(scen, i) {
+  let s = 0;
+  for (let j = 0; j < KNN; j++) s += tt(scen, origin, D.nearCell[i * KNN + j]) * D.nearW[i * KNN + j];
+  return s;
+}
 
 /* ---------- 상태 ---------- */
-let origin = D.metro.find(s => s.name === '정부청사') || D.metro[10];
+let origin = ALL.findIndex(s => s.name === '정부청사역');
+if (origin < 0) origin = 0;
 let scen = 'tram';                  // 'now' | 'tram'
 let mode = 'geo';                   // 'geo' | 'time' | 'diff'
-let model = { now: null, tram: null }, arrive = { now: null, tram: null };
 const minsNow = new Float32Array(N), minsTram = new Float32Array(N);
 const posGeo = new Float32Array(N * 2), posNow = new Float32Array(N * 2), posTram = new Float32Array(N * 2);
 const cur = new Float32Array(N * 2), from = new Float32Array(N * 2), to = new Float32Array(N * 2);
 let tw = 1, fromT = 0, toT = 0, curT = 0;   // 모프 진행도 / time-amount
 let stats = null, hover = null;
-const GN = D.grid.length;
+const GN = NC;
 const gridXY = new Float32Array(GN * 2);    // 그리드 지리 좌표(모프 없음)
 const gridCut = new Float32Array(GN);       // 트램으로 줄어드는 시간(분)
 
@@ -188,50 +136,58 @@ function smoothRadius(pos) {
 }
 
 function recompute() {
-  for (const k of ['now', 'tram']) {
-    arrive[k] = arriveTimes(origin, k);
-    model[k] = makeModel(origin, arrive[k]);
+  const o = ALL[origin];
+  for (let i = 0; i < NODE_S; i++) {
+    minsNow[i] = borrowed('now', i);
+    minsTram[i] = borrowed('tram', i);
   }
-  for (let i = 0; i < N; i++) {
-    minsNow[i] = model.now(PTS[i][0], PTS[i][1]);
-    minsTram[i] = model.tram(PTS[i][0], PTS[i][1]);
+  for (let i = NODE_S; i < N; i++) {
+    const col = NC + (i - NODE_S);
+    minsNow[i] = tt('now', origin, col);
+    minsTram[i] = tt('tram', origin, col);
   }
   RMAX = Math.min(BOX.w, BOX.h) / 2 - (VW >= 821 ? 30 : 16);
   for (let i = 0; i < N; i++) {
     const g = geoFit(PTS[i]);
     posGeo[i * 2] = g.x; posGeo[i * 2 + 1] = g.y;
-    const a = timePos(PTS[i][0], PTS[i][1], minsNow[i], origin);
+    const a = timePos(PTS[i][0], PTS[i][1], minsNow[i], o);
     posNow[i * 2] = a.x; posNow[i * 2 + 1] = a.y;
-    const b = timePos(PTS[i][0], PTS[i][1], minsTram[i], origin);
+    const b = timePos(PTS[i][0], PTS[i][1], minsTram[i], o);
     posTram[i * 2] = b.x; posTram[i * 2 + 1] = b.y;
   }
   smoothRadius(posNow); smoothRadius(posTram);
   for (let i = 0; i < GN; i++) {
-    const [lo, la] = D.grid[i];
-    const g = geoFit([lo, la]); gridXY[i * 2] = g.x; gridXY[i * 2 + 1] = g.y;
-    const a = model.now(lo, la), b = model.tram(lo, la);
-    gridCut[i] = Math.max(0, a - b);
+    const g = geoFit(D.grid[i]); gridXY[i * 2] = g.x; gridXY[i * 2 + 1] = g.y;
+    gridCut[i] = Math.max(0, tt('now', origin, i) - tt('tram', origin, i));
   }
   computeStats();
 }
 
+const DEST = ['정부청사역', '대전역', '유성온천역', '대전복합터미널', '관저네거리', '진잠네거리'];
+
 function computeStats() {
-  const c = D.cellKm2; let a30n = 0, a30t = 0, a45n = 0, a45t = 0;
-  for (const [lo, la] of D.grid) {
-    const n = model.now(lo, la), t = model.tram(lo, la);
+  let a30n = 0, a30t = 0, a45n = 0, a45t = 0;
+  for (let i = 0; i < GN; i++) {
+    const c = D.cellKm2[i], n = tt('now', origin, i), t = tt('tram', origin, i);
     if (n <= 30) a30n += c; if (t <= 30) a30t += c;
     if (n <= 45) a45n += c; if (t <= 45) a45t += c;
   }
-  const dest = ['정부청사', '대전역', '유성온천', '대전복합터미널', '관저', '진잠네거리'];
-  const rows = dest.map(nm => {
-    const s = ALL.find(x => x.name === nm) || ALL.find(x => x.name.startsWith(nm));
-    return { name: nm, now: model.now(s.lon, s.lat), tram: model.tram(s.lon, s.lat) };
-  }).filter(r => r.name !== origin.name).slice(0, 5);
-  let cutSum = 0, cutMax = 0, cutCells = 0;
-  for (let i = 0; i < GN; i++) { const v = gridCut[i];
-    if (v > 0.6) { cutCells++; cutSum += v; if (v > cutMax) cutMax = v; } }
+  const rows = DEST.map(nm => {
+    const i = ALL.findIndex(x => x.name === nm);
+    return i < 0 ? null
+      : { name: nm, now: tt('now', origin, NC + i), tram: tt('tram', origin, NC + i) };
+  }).filter(r => r && r.name !== ALL[origin].name).slice(0, 5);
+  // 단축 면적은 셀마다 면적이 다르므로 개수 × 상수로 셀 수 없다(경계에 걸친 셀은 작다).
+  // 최대 단축은 두 시나리오 모두 CAP 아래인 셀에서만 센다. CAP 에 잘린 셀은 실제
+  // 시간이 얼마든 CAP 으로 접히므로, 차이를 그대로 쓰면 없는 단축이 생긴다.
+  let cutSum = 0, cutMax = 0, cutCells = 0, cutArea = 0;
+  for (let i = 0; i < GN; i++) {
+    const v = gridCut[i]; if (v <= 0.6) continue;
+    cutCells++; cutSum += v; cutArea += D.cellKm2[i];
+    if (v > cutMax && raw('now', origin, i) < CAP && raw('tram', origin, i) < CAP) cutMax = v;
+  }
   stats = { a30n, a30t, a45n, a45t, rows,
-            cutArea: cutCells * D.cellKm2, cutAvg: cutCells ? cutSum / cutCells : 0, cutMax };
+            cutArea, cutAvg: cutCells ? cutSum / cutCells : 0, cutMax };
   paintStats();
 }
 
@@ -303,6 +259,8 @@ function ghostPoly(f, src) {
   if (f.closed) ctx.closePath();
 }
 
+const isTramOnly = s => s.line === '트램';
+
 function draw() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, VW, VH);
@@ -338,36 +296,27 @@ function draw() {
   // 노선
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   ctx.strokeStyle = C.green; ctx.lineWidth = 3.6;
-  for (const r of ROUTES) if (r.kind === 'm1') { routePath(r); ctx.stroke(); }
+  for (const r of D.routes) if (r.kind === 'm1') { routePath(r); ctx.stroke(); }
   ctx.strokeStyle = scen === 'tram' ? '#7a2f00' : 'rgba(46,98,76,.3)';
   ctx.lineWidth = 3.6;
-  for (const r of ROUTES) if (r.kind === 'tram') { routePath(r); ctx.stroke(); }
+  for (const r of D.routes) if (r.kind === 'tram') { routePath(r); ctx.stroke(); }
 
   // 구 이름
-  ctx.fillStyle = 'rgba(27,59,47,.55)'; ctx.font = '700 13px Pretendard, sans-serif'; ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(27,59,47,.62)'; ctx.font = '700 15px Pretendard, sans-serif'; ctx.textAlign = 'center';
   for (let i = 0; i < D.guLabels.length; i++) { const [x, y] = P(GU_S + i); ctx.fillText(D.guLabels[i].name, x, y); }
 
   // 정거장
   for (let i = 0; i < ALL.length; i++) {
     const s = ALL[i], [x, y] = P(NODE_S + i);
-    const isTram = s.line === '트램';
-    if (isTram && scen === 'now') continue;
-    const isO = s.id === origin.id, isH = hover === i;
+    if (isTramOnly(s) && scen === 'now') continue;
+    const isO = i === origin, isH = hover === i;
     const rr = VW >= 821 ? 3.6 : 4.4;
     ctx.beginPath(); ctx.arc(x, y, isO ? rr + 4.5 : isH ? rr + 2.5 : rr, 0, 7);
-    ctx.fillStyle = isO ? C.orange : (isTram ? '#fff' : '#fff');
+    ctx.fillStyle = isO ? C.orange : '#fff';
     ctx.fill();
     ctx.lineWidth = isO ? 3 : 1.6;
-    ctx.strokeStyle = isO ? C.green : (isTram ? '#7a2f00' : C.green);
+    ctx.strokeStyle = isO ? C.green : (isTramOnly(s) ? '#7a2f00' : C.green);
     ctx.stroke();
-  }
-
-  // 랜드마크
-  ctx.fillStyle = C.ink; ctx.font = '600 11.5px Pretendard, sans-serif';
-  for (let i = 0; i < D.landmarks.length; i++) {
-    const [x, y] = P(LM_S + i);
-    ctx.beginPath(); ctx.arc(x, y, 3.2, 0, 7); ctx.fill();
-    ctx.textAlign = 'left'; ctx.fillText(D.landmarks[i].name, x + 7, y + 4);
   }
 
   // 시간 링 (채움 위)
@@ -389,9 +338,9 @@ function draw() {
   }
 
   // 출발지 라벨
-  const [ox, oy] = P(NODE_S + ALL.indexOf(origin));
+  const [ox, oy] = P(NODE_S + origin);
   ctx.font = '800 14px Pretendard, sans-serif'; ctx.textAlign = 'left';
-  ctx.fillStyle = C.green; ctx.fillText(origin.name, ox + 13, oy - 8);
+  ctx.fillStyle = C.green; ctx.fillText(ALL[origin].name, ox + 13, oy - 8);
 }
 
 function drawDiff() {
@@ -418,22 +367,22 @@ function drawDiff() {
   for (const f of FEAT) if (f.key === 'gu') { poly(f); ctx.stroke(); }
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   ctx.strokeStyle = 'rgba(46,98,76,.4)'; ctx.lineWidth = 2.8;
-  for (const r of ROUTES) if (r.kind === 'm1') { routePath(r); ctx.stroke(); }
+  for (const r of D.routes) if (r.kind === 'm1') { routePath(r); ctx.stroke(); }
   ctx.strokeStyle = '#2e624c'; ctx.lineWidth = 3.4;
-  for (const r of ROUTES) if (r.kind === 'tram') { routePath(r); ctx.stroke(); }
+  for (const r of D.routes) if (r.kind === 'tram') { routePath(r); ctx.stroke(); }
 
   for (let i = 0; i < ALL.length; i++) {
-    const s = ALL[i]; if (s.line !== '트램') continue;
+    if (!isTramOnly(ALL[i])) continue;
     const [x, y] = P(NODE_S + i);
     ctx.beginPath(); ctx.arc(x, y, 3.2, 0, 7);
     ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = '#2e624c'; ctx.lineWidth = 1.5; ctx.stroke();
   }
-  const [ox, oy] = P(NODE_S + ALL.indexOf(origin));
+  const [ox, oy] = P(NODE_S + origin);
   ctx.beginPath(); ctx.arc(ox, oy, 8, 0, 7); ctx.fillStyle = C.orange; ctx.fill();
   ctx.strokeStyle = C.green; ctx.lineWidth = 3; ctx.stroke();
   ctx.font = '800 14px Pretendard, sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = C.green;
-  ctx.fillText(origin.name, ox + 13, oy - 8);
-  ctx.fillStyle = 'rgba(27,59,47,.55)'; ctx.font = '700 13px Pretendard, sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(ALL[origin].name, ox + 13, oy - 8);
+  ctx.fillStyle = 'rgba(27,59,47,.62)'; ctx.font = '700 15px Pretendard, sans-serif'; ctx.textAlign = 'center';
   for (let i = 0; i < D.guLabels.length; i++) { const [x, y] = P(GU_S + i); ctx.fillText(D.guLabels[i].name, x, y); }
 }
 
@@ -465,7 +414,7 @@ const rel = e => { const r = cvs.getBoundingClientRect(); return { x: e.clientX 
 function pick(px, py) {
   const HIT = VW >= 821 ? 16 : 22; let best = -1, bd = HIT * HIT;
   for (let i = 0; i < ALL.length; i++) {
-    if (ALL[i].line === '트램' && scen === 'now') continue;
+    if (isTramOnly(ALL[i]) && scen === 'now') continue;
     const [x, y] = P(NODE_S + i); const d = (x - px) ** 2 + (y - py) ** 2;
     if (d < bd) { bd = d; best = i; }
   }
@@ -478,7 +427,7 @@ cvs.addEventListener('pointermove', e => {
   const h = pick(p.x, p.y); hover = h < 0 ? null : h;
   cvs.style.cursor = h < 0 ? 'grab' : 'pointer';
   if (h >= 0) {
-    const s = ALL[h], mn = scen === 'tram' ? minsTram[NODE_S + h] : minsNow[NODE_S + h];
+    const s = ALL[h];
     const a = minsNow[NODE_S + h], b = minsTram[NODE_S + h];
     const fm = v => v >= CAP ? CAP + '분+' : Math.round(v) + '분';
     tip.innerHTML = `<b>${s.name}</b><span>${s.line}</span>
@@ -490,7 +439,7 @@ cvs.addEventListener('pointermove', e => {
   } else tip.hidden = true;
 });
 function up(e) {
-  if (drag && moved < 5) { const h = pick(drag.x, drag.y); if (h >= 0) setOrigin(ALL[h]); }
+  if (drag && moved < 5) { const h = pick(drag.x, drag.y); if (h >= 0) setOrigin(h); }
   drag = null; cvs.style.cursor = 'grab';
 }
 cvs.addEventListener('pointerup', up); cvs.addEventListener('pointercancel', up);
@@ -502,10 +451,11 @@ cvs.addEventListener('wheel', e => {
 }, { passive: false });
 cvs.addEventListener('dblclick', () => { view = { s: 1, x: 0, y: 0 }; });
 
-function setOrigin(s) {
-  origin = s; recompute();
-  document.getElementById('originName').textContent = s.name;
-  document.getElementById('originLine').textContent = s.line;
+function setOrigin(i) {
+  origin = i; recompute();
+  document.getElementById('originName').textContent = ALL[i].name;
+  document.getElementById('originLine').textContent = ALL[i].line;
+  document.getElementById('originPick').value = String(i);
   if (mode === 'time') tweenTo('time', scen); else settle();
 }
 
@@ -544,16 +494,20 @@ document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click'
   if (window.innerWidth < 821) document.body.dataset.sheet = '0';
 }));
 document.getElementById('originPick').addEventListener('change', e => {
-  const s = ALL.find(x => String(x.id) === e.target.value); if (s) setOrigin(s);
+  setOrigin(Number(e.target.value));
 });
 
 (function initPicker() {
   const sel = document.getElementById('originPick');
-  const g1 = document.createElement('optgroup'); g1.label = '도시철도 1호선';
-  for (const s of D.metro) g1.appendChild(new Option(s.name, s.id));
-  const g2 = document.createElement('optgroup'); g2.label = '트램 2호선 정거장';
-  for (const s of D.tram) g2.appendChild(new Option(s.name, s.id));
-  sel.append(g1, g2); sel.value = String(origin.id);
+  // 환승역은 두 노선 어디에도 중복해 넣지 않고 자기 그룹을 갖는다.
+  for (const [label, line] of [['도시철도 1호선', '1호선'],
+                               ['1호선 · 트램 환승', '1호선·트램'],
+                               ['트램 2호선 정거장', '트램']]) {
+    const g = document.createElement('optgroup'); g.label = label;
+    ALL.forEach((s, i) => { if (s.line === line) g.appendChild(new Option(s.name, i)); });
+    if (g.childElementCount) sel.appendChild(g);
+  }
+  sel.value = String(origin);
 })();
 
 const sheetBtn = document.getElementById('sheetBtn');
@@ -564,8 +518,8 @@ addEventListener('orientationchange', () => setTimeout(resize, 220));
 document.body.dataset.sheet = '0';
 
 resize();
-document.getElementById('originName').textContent = origin.name;
-document.getElementById('originLine').textContent = origin.line;
+document.getElementById('originName').textContent = ALL[origin].name;
+document.getElementById('originLine').textContent = ALL[origin].line;
 document.body.dataset.scen = scen;
 requestAnimationFrame(step);
 document.body.dataset.view = 'geo';
