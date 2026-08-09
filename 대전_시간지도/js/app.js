@@ -365,8 +365,8 @@ function routePath(r) {
   }
   if (r.closed) ctx.closePath();
 }
-function ghostPoly(f, src) {
-  ctx.beginPath();
+/** 반대 시나리오의 한 조각. beginPath 는 호출자가 한다(여러 조각을 모아 evenodd 로 채우려고). */
+function ghostSub(f, src) {
   for (let j = 0; j < f.n; j++) {
     const i = f.s + j;
     const gx = src[i * 2] * curT + posGeo[i * 2] * (1 - curT);
@@ -376,15 +376,33 @@ function ghostPoly(f, src) {
   }
   if (f.closed) ctx.closePath();
 }
+const ghostAt = (i, src) => [
+  (src[i * 2] * curT + posGeo[i * 2] * (1 - curT)) * view.s + view.x,
+  (src[i * 2 + 1] * curT + posGeo[i * 2 + 1] * (1 - curT)) * view.s + view.y];
 
 function draw() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, VW, VH);
   if (mode === 'diff' && tw > .55) { drawDiff(); return; }
 
+  /* ── 줄어드는 띠 ──
+     '트램 후' 뷰에서는 **현재 지도를 면으로 먼저 깔고** 그 위에 트램 후 지도를 덮는다.
+     밖으로 삐져나와 보이는 라임색 띠가 곧 트램이 지우는 시간이다.
+     점선 외곽선만으로는 두 지도의 크기 차이가 읽히지 않았다. */
+  const band = curT > 0.05 && scen === 'tram';
+  if (band) {
+    ctx.save();
+    ctx.globalAlpha = curT;
+    ctx.beginPath();
+    for (const f of FEAT) if (f.key === 'city') ghostSub(f, posNow);
+    ctx.fillStyle = C.lime; ctx.fill('evenodd');
+    ctx.strokeStyle = 'rgba(46,98,76,.5)'; ctx.lineWidth = 1.4; ctx.stroke();
+    ctx.restore();
+  }
+
   // 시 영역
   ctx.fillStyle = scen === 'tram' ? C.orange : C.lime;
-  ctx.globalAlpha = curT > .05 ? .92 : 1;
+  ctx.globalAlpha = curT > .05 ? (band ? 1 : .92) : 1;
   ctx.beginPath();
   for (const f of FEAT) if (f.key === 'city') {
     for (let j = 0; j < f.n; j++) { const [x, y] = P(f.s + j); j ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
@@ -399,14 +417,13 @@ function draw() {
   ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = 1.4;
   for (const f of FEAT) if (f.key === 'gu') { smoothPath(f); ctx.stroke(); }
 
-  /* 대비 고스트(반대 시나리오)는 반드시 채움 **위**에 그린다.
-     트램 후 지도는 현재 지도 안쪽에 들어오므로, 아래에 깔면 축소분이 통째로 가려진다. */
+  // 반대 시나리오의 외곽선 — 띠의 바깥 경계를 또렷하게(현재 뷰에서는 이게 유일한 대비)
   if (curT > 0.05) {
     const other = scen === 'tram' ? posNow : posTram;
     ctx.save(); ctx.globalAlpha = curT;
     ctx.strokeStyle = scen === 'tram' ? 'rgba(46,98,76,.85)' : '#d95d00';
     ctx.lineWidth = 2.2; ctx.setLineDash([7, 5]);
-    for (const f of FEAT) if (f.key === 'city') { ghostPoly(f, other); ctx.stroke(); }
+    for (const f of FEAT) if (f.key === 'city') { ctx.beginPath(); ghostSub(f, other); ctx.stroke(); }
     ctx.setLineDash([]); ctx.restore();
   }
 
@@ -476,6 +493,34 @@ function draw() {
   const [ox, oy] = P(NODE_S + ALL.indexOf(origin));
   ctx.font = '800 14px Pretendard, sans-serif'; ctx.textAlign = 'left';
   plate(origin.name, ox + 13, oy - 8, 14, C.green);
+
+  if (band && tw > .8 && stats) bandCallout();
+}
+
+/** 띠가 가장 두꺼운 방향에 치수선을 긋고 축소율을 적는다. 띠의 의미를 글로 못박는 장치. */
+function bandCallout() {
+  let gi = -1, gmax = 0;
+  for (const i of CITY_IDX) {
+    const d = radial(minsNow[i]) - radial(minsTram[i]);
+    if (d > gmax) { gmax = d; gi = i; }
+  }
+  if (gi < 0 || gmax * view.s < 26) return;
+  const [ax, ay] = ghostAt(gi, posNow), [bx, by] = ghostAt(gi, posTram);
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, (tw - .8) * 5);
+  ctx.strokeStyle = C.green; ctx.lineWidth = 2; ctx.lineCap = 'butt';
+  ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+  const th = Math.atan2(by - ay, bx - ax), nx = -Math.sin(th) * 5, ny = Math.cos(th) * 5;
+  ctx.beginPath(); ctx.moveTo(ax - nx, ay - ny); ctx.lineTo(ax + nx, ay + ny);
+  ctx.moveTo(bx - nx, by - ny); ctx.lineTo(bx + nx, by + ny); ctx.stroke();
+  const t = '시간지도 −' + Math.round(stats.shrink * 100) + '%';
+  ctx.font = '800 13px Pretendard, sans-serif'; ctx.textAlign = 'left';
+  const w = ctx.measureText(t).width, lx = (ax + bx) / 2 + 10, ly = (ay + by) / 2 + 5;
+  ctx.fillStyle = C.green; ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(lx - 6, ly - 15, w + 12, 21, 6) : ctx.rect(lx - 6, ly - 15, w + 12, 21);
+  ctx.fill();
+  ctx.fillStyle = C.lime; ctx.fillText(t, lx, ly);
+  ctx.restore();
 }
 
 function drawDiff() {
@@ -640,7 +685,8 @@ document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click'
   document.getElementById('ghostNote').textContent =
     mode === 'geo' ? '지리 지도 — 실제 거리 그대로' :
     mode === 'diff' ? '트램으로 줄어드는 시간 — 진할수록 많이 줄어듭니다' :
-    scen === 'tram' ? '점선 = 현재 시간지도 · 면 = 트램 후' : '점선 = 트램 후 시간지도 · 면 = 현재';
+    scen === 'tram' ? '연두색 띠 = 트램이 지우는 시간 · 주황 면 = 트램 후 도달 범위'
+                    : '점선 = 트램 후 시간지도 · 면 = 현재';
   tweenTo(mode === 'diff' ? 'geo' : mode, scen);
   if (window.innerWidth < 821) document.body.dataset.sheet = '0';
 }));
