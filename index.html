@@ -32,8 +32,8 @@
         <button data-mode="tram" class="on">시간 · 트램 후</button>
         <button data-mode="diff">단축 시간</button>
       </div>
-      <div id="ghostNote">점선 = 현재 시간지도 · 면 = 트램 후</div>
-      <div id="hint">정거장 클릭해 출발지 변경 · 스크롤 확대 · 드래그 이동 · 더블클릭 원위치</div>
+      <div id="ghostNote">연두색 띠 = 트램이 지우는 시간 · 주황 면 = 트램 후 도달 범위</div>
+      <div id="hint">정거장에 마우스를 올리면 소요시간 · 클릭하면 출발지 변경 · 스크롤 확대 · 드래그 이동 · 더블클릭 원위치</div>
     </div>
   </div>
 
@@ -41,6 +41,17 @@
 
   <aside id="railR">
     <button id="sheetClose" type="button" aria-label="닫기">×</button>
+
+    <div class="card" id="shrinkCard">
+      <h3>트램 후, 도시가 줄어드는 정도</h3>
+      <div class="kpi">
+        <span class="v tram" id="shrink">—</span><span class="u">시간지도 면적</span>
+      </div>
+      <div class="foot-line">
+        같은 축척으로 그린 두 시간지도의 면적 비교입니다.
+        <b id="shrinkNote">—</b>
+      </div>
+    </div>
 
     <div class="card" id="reachCard">
       <h3>30분 안에 닿는 대전</h3>
@@ -71,18 +82,26 @@
     </div>
 
     <div id="legend">
-      <div class="row"><span class="sw" style="background:#c7ff00"></span> 현재 시간지도</div>
+      <div class="row"><span class="sw" style="background:#c7ff00"></span> 현재 시간지도 — 밖으로 남는 띠가 트램이 지우는 시간</div>
       <div class="row"><span class="sw" style="background:#ff8324"></span> 트램 도입 후 시간지도</div>
       <div class="row"><span class="dash"></span> 대비되는 시나리오의 외곽선</div>
       <div class="row" id="diffLegend"><span class="sw" style="background:#c7ff00"></span>
         <span class="sw" style="background:#ffb43a"></span>
         <span class="sw" style="background:#ff6a00"></span> 단축 10 · 20 · 30분↑</div>
       <div class="note">
-        원 = 출발지에서 15 · 30 · 45 · 60 · 75분. 방향은 실제 방위, 반지름은 소요시간입니다.
-        가까운 곳이 뭉치지 않도록 반지름에 0.68제곱 스케일을 썼고, 90분을 넘으면 테두리에 고정됩니다.
+        원 = 출발지에서 15 · 30 · 45 · 60 · 75 · 90분. 방향은 실제 방위이고
+        <b>반지름은 소요시간에 정비례</b>합니다(150분 상한, 전 출발지 기준 시 경계 최대치가
+        135.6분이라 실제로는 걸리지 않습니다).
         노선은 정거장을 순서대로 잇는 스플라인으로 그려 왜곡해도 꺾이지 않습니다(선형은 단순화됨).<br>
+        <b>축척</b> · 두 단계의 성격이 다릅니다.
+        <b>지리 → 현재</b>는 km에서 분으로 단위가 바뀌는 축척 변경이라, 현재 시간지도 면적을
+        지리 지도의 88%로 맞춰 약하게 두었습니다.
+        <b>현재 → 트램 후</b>는 분→픽셀 환산을 <b>현재 지도 하나로 고정</b>해 두 시간지도가
+        함께 쓰므로, 크기 차이가 전부 실제 시간 차이입니다. 반지름이 시간에 정비례하니
+        위 카드의 면적 숫자가 곧 화면에서 줄어든 넓이입니다.<br>
         <b>모델</b> · 직선거리에 우회계수 1.3 · 도보 4.55km/h ·
         시내버스 접근·대기 10분 + 표정속도 16km/h + 5km 초과 시 환승 7분 ·
+        철도 하차 후에는 도보 또는 연계버스(환승도보 2분 + 대기 3분 + 16km/h) 중 빠른 쪽 ·
         1호선 표정속도 33.5km/h(20.5km, 대기 4분) ·
         트램 표정속도 22.06km/h(본선 33.9km · 45개 정거장 · 대기 3.75분 = 첨두 배차 7분 30초의 절반) ·
         환승 도보 2분 + 거리.<br>
