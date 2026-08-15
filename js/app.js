@@ -120,6 +120,7 @@ function fitGeo() {
   const cx = (mnx + mxx) / 2, cy = (mny + mxy) / 2;
   geoFit = p => ({ x: BOX.cx + (p[0] - cx) * KX * sc, y: BOX.cy - (p[1] - cy) * KY * sc });
   GEO_SC = sc;                                     // px per km — 단축시간 격자 셀 크기에 쓴다
+  CUT_BASE = Math.max(1.6, Math.min(3.6, w * sc * CUT_RATIO));   // 구 경계 기준 굵기
   GEO_AREA = CITY_KM2 * sc * sc;                   // 지리 지도로 그려진 대전의 픽셀 면적
   BOXR = Math.min(BOX.w - 2 * pad, BOX.h - 2 * pad) / 2;   // 시간지도가 쓸 수 있는 반지름 예산
 }
@@ -136,6 +137,14 @@ const POW = 1;
 const GEO_FILL = 0.98;
 const NOW_VS_GEO = 0.88;  // 현재 시간지도 면적 ÷ 지리 지도 면적
 let GEO_AREA = 1, GEO_SC = 20, BOXR = 300, RMAX = 300, RFILL = 260, TREF = 90;
+/* 구 경계 굵기. 화면 픽셀로 고정하면 창 크기와 확대율이 바뀔 때마다 지도만 커져 선이
+   가늘어 보이므로, 기준값을 지도 폭에서 뽑고 확대에는 역 마커처럼 완만하게만 따라간다.
+   비율은 포스터 원본(지도 폭의 0.78%)을 그대로 쓰지 않는다. 포스터는 지도가 판면 안에
+   들어오지만 여기서는 화면 밖까지 흘려 보내기 때문에, 같은 비율이면 5.9px가 나와
+   트램 노선(5.2px)보다 굵어진다. 구 경계는 바탕이지 주인공이 아니므로 지하철 노선(2.2px)
+   바로 위, 트램 노선의 절반쯤에 둔다. */
+const CUT_RATIO = .0034;
+let CUT_BASE = 2.6;
 const radial = m => Math.min(RMAX, RFILL * Math.pow(Math.min(m, CAP) / TREF, POW));
 function timePos(lon, lat, minutes, o) {
   const dx = (lon - o.lon) * KX, dy = (lat - o.lat) * KY;
@@ -204,8 +213,11 @@ for (let i = 0; i < GU_FEAT.length; i++) {
   for (let j = i + 1; j < GU_FEAT.length; j++) GU_CUTS.push(...sharedRuns(GU_FEAT[i], GU_FEAT[j]));
 }
 
-/* 출력용 구 경계는 GIS 꼭짓점을 그대로 쓰지 않는다. 180m 이하의 미세 굴곡을 덜어내고,
-   1.1km보다 짧은 파편은 버린 뒤 하나의 안정된 중심선으로만 그린다. */
+/* 출력용 구 경계. 공유 변은 구 '쌍'마다 따로 뽑히기 때문에 세 구가 만나는 지점마다
+   토막이 난다. 그대로 그리면 지도 한복판에 20px짜리 동강이 떠 있게 된다.
+   그래서 ① 끝점이 맞닿는 토막을 가장 곧게 이어지는 짝끼리 잇고 ② 그러고도 남는
+   짧은 조각만 버린 뒤 ③ 70m 수준으로만 단순화한다. 원본 포스터의 구 경계는 매끈한
+   곡선이 아니라 행정 경계 특유의 잔 굴곡을 가진 '잘린 자국'이라, 세게 펴면 흰 국수가 된다. */
 function geoPoint(i) { return [PTS[i][0] * KX, PTS[i][1] * KY]; }
 function pointSegSq(p, a, b) {
   const vx = b[0] - a[0], vy = b[1] - a[1];
@@ -237,7 +249,54 @@ function runKm(run) {
   }
   return d;
 }
-const GU_DRAW = GU_CUTS.filter(run => runKm(run) >= 1.1).map(run => simplifyIndexRun(run, .18));
+/** 조각의 한쪽 끝에서 바깥(조각 몸통 반대편)을 향하는 단위 벡터 */
+function tipDir(run, atHead) {
+  const n = run.length;
+  const a = geoPoint(run[atHead ? 0 : n - 1]);
+  const b = geoPoint(run[atHead ? Math.min(2, n - 1) : Math.max(0, n - 3)]);
+  const dx = a[0] - b[0], dy = a[1] - b[1], L = Math.hypot(dx, dy) || 1;
+  return [dx / L, dy / L];
+}
+/** 끝점이 joinKm 안에서 만나는 토막을 잇는다. 삼거리에서는 가장 곧게 이어지는 쪽을 고르고,
+ *  꺾여 들어오는 세 번째 가지는 잇지 않고 남겨 T자로 맞닿게 둔다. */
+function chainCuts(runs, joinKm) {
+  const used = new Array(runs.length).fill(false), out = [];
+  for (let i = 0; i < runs.length; i++) {
+    if (used[i]) continue;
+    used[i] = true;
+    let chain = runs[i].slice();
+    for (const atHead of [false, true]) {
+      for (;;) {
+        const tip = geoPoint(chain[atHead ? 0 : chain.length - 1]), u = tipDir(chain, atHead);
+        let best = -1, bestHead = false, bestCos = 0;   // 90°를 넘겨 되꺾이는 연결은 만들지 않는다
+        for (let j = 0; j < runs.length; j++) {
+          if (used[j]) continue;
+          for (const candHead of [true, false]) {
+            const q = geoPoint(runs[j][candHead ? 0 : runs[j].length - 1]);
+            if (Math.hypot(q[0] - tip[0], q[1] - tip[1]) > joinKm) continue;
+            const v = tipDir(runs[j], candHead);
+            const cos = -(u[0] * v[0] + u[1] * v[1]);
+            if (cos > bestCos) { bestCos = cos; best = j; bestHead = candHead; }
+          }
+        }
+        if (best < 0) break;
+        used[best] = true;
+        // 이어붙일 쪽의 이음매 꼭짓점은 버린다(체인 쪽 것과 겹쳐 미세한 꺾임을 만든다).
+        const add = bestHead ? runs[best].slice(1) : runs[best].slice(0, -1).reverse();
+        chain = atHead ? add.reverse().concat(chain) : chain.concat(add);
+      }
+    }
+    out.push(chain);
+  }
+  return out;
+}
+/* 5개 구를 나누는 경계는 쌍으로 따지면 정확히 7개다(유성↔서 18.3km · 유성↔대덕 12.0km ·
+   서↔중 9.9km · 서↔대덕 3.2km · 중↔동 22.4km · 중↔대덕 1.15km · 동↔대덕 19.1km).
+   하나라도 빠지면 두 구가 붙어 버리므로 길이로 거르는 문턱은 220m 근접 판정이 만들어 낼 수
+   있는 부스러기만 걸러 낼 만큼(0.3km)만 둔다 — 실제 경계 중 가장 짧은 것도 그 네 배다. */
+const GU_DRAW = chainCuts(GU_CUTS, .6)
+  .filter(run => runKm(run) >= .3)
+  .map(run => simplifyIndexRun(run, .07));
 
 /** 대전 시역의 실제 면적(km²) — 신발끈. 지리 지도와 시간지도의 면적을 맞출 때 쓴다. */
 const CITY_KM2 = (() => {
@@ -423,6 +482,8 @@ const mapFont = (weight, size) => `${weight} ${size / view.s}px Pretendard, sans
    화면상 0.78×~1.85× 범위라 확대감은 느껴지면서도 역이 지도를 덮지 않는다. */
 const markerScale = () => Math.max(.78, Math.min(1.85, Math.pow(view.s, .46)));
 const MK = n => n * markerScale() / view.s;
+/** 구 경계의 화면 굵기(non-scaling-stroke 라 화면 px 그대로 넣는다) */
+const cutWidth = () => CUT_BASE * Math.max(.92, Math.min(2.1, Math.pow(view.s, .5)));
 
 /** 정보 텍스트는 외곽선이나 배경판 없이 단색으로만 그린다. */
 function mapText(text, x, y, color) {
@@ -459,12 +520,13 @@ function cityPath(src = null) {
 }
 
 /** 중심형 Catmull-Rom을 제한된 cubic SVG 패스로 변환한다.
- *  균일 스플라인의 급커브 오버슈트와 고리 현상을 막아 인쇄용 노선처럼 안정적으로 잇는다. */
-function routePathD(r) {
-  const pts = r.idx.map(i => P(NODE_S + i)), m = pts.length; if (m < 2) return;
-  const pt = i => pts[r.closed ? (i + m) % m : Math.max(0, Math.min(m - 1, i))];
+ *  균일 스플라인의 급커브 오버슈트와 고리 현상을 막아 인쇄용 선처럼 안정적으로 잇는다.
+ *  꼭짓점을 '지나가는' 곡선이라, 단순화가 살려 둔 실제 꺾임이 그대로 남는다. */
+function curveD(pts, closed) {
+  const m = pts.length; if (m < 2) return '';
+  const pt = i => pts[closed ? (i + m) % m : Math.max(0, Math.min(m - 1, i))];
   const [x0, y0] = pt(0); let d = `M${x0.toFixed(2)} ${y0.toFixed(2)}`;
-  const last = r.closed ? m : m - 1;
+  const last = closed ? m : m - 1;
   for (let i = 0; i < last; i++) {
     const [p0x, p0y] = pt(i - 1), [p1x, p1y] = pt(i), [p2x, p2y] = pt(i + 1), [p3x, p3y] = pt(i + 2);
     const d01 = Math.sqrt(Math.max(.001, Math.hypot(p1x - p0x, p1y - p0y)));
@@ -481,8 +543,9 @@ function routePathD(r) {
     if (l2 > cap) { t2x *= cap / l2; t2y *= cap / l2; }
     d += `C${(p1x + t1x).toFixed(2)} ${(p1y + t1y).toFixed(2)} ${(p2x - t2x).toFixed(2)} ${(p2y - t2y).toFixed(2)} ${p2x.toFixed(2)} ${p2y.toFixed(2)}`;
   }
-  return r.closed ? d + 'Z' : d;
+  return closed ? d + 'Z' : d;
 }
+function routePathD(r) { return curveD(r.idx.map(i => P(NODE_S + i)), r.closed); }
 /** 반대 시나리오의 한 조각. beginPath 는 호출자가 한다(여러 조각을 모아 evenodd 로 채우려고). */
 function ghostSub(f, src) {
   traceSmoothFeature(f, i => ghostAt(i, src));
@@ -506,16 +569,26 @@ function closedPathD(run, at) {
   }
   return d + 'Z';
 }
+/* 예전에는 중점 기반 2차 곡선으로 그렸다. 그 방식은 꼭짓점을 지나지 않고 전부 제어점으로만
+   쓰기 때문에 모든 모서리를 절반씩 깎아낸다 — 단순화가 애써 남긴 꺾임만 골라 지우는 셈이라
+   경계가 굴곡 없는 국수가 됐다. 노선과 같은 보간 곡선으로 바꿔 꼭짓점을 지나가게 한다. */
+/* 단순화는 지리 좌표에서 하지만 실제로 그려지는 건 시간 왜곡을 거친 좌표다. 왜곡은 구역마다
+   압축률이 달라서, 지리에서 고른 간격이던 꼭짓점이 화면에서는 한 곳에 뭉친다. 그 상태로
+   보간 곡선을 태우면 1px 안에서 되꺾이는 매듭이 생기므로 화면 간격으로 한 번 더 솎는다.
+   길이를 이유로 조각을 빼지는 않는다. 7개의 구 경계는 5개 구를 나누는 데 하나도 빠짐없이
+   필요하고, 그중 중구↔대덕구는 1.15km로 짧아 왜곡에 눌리면 20px까지 줄어든다.
+   그걸 토막으로 보고 빼면 화면에서 두 구가 한 덩어리로 붙어 버린다. */
 function boundaryPathD() {
   let d = '';
+  const minGap = 1.1 / view.s;
   for (const run of GU_DRAW) {
-    const pts = run.map(P); if (pts.length < 2) continue;
-    d += `M${pts[0][0].toFixed(2)} ${pts[0][1].toFixed(2)}`;
-    for (let i = 1; i < pts.length - 1; i++) {
-      const p = pts[i], n = pts[i + 1];
-      d += `Q${p[0].toFixed(2)} ${p[1].toFixed(2)} ${((p[0] + n[0]) / 2).toFixed(2)} ${((p[1] + n[1]) / 2).toFixed(2)}`;
+    const pts = [];
+    for (let i = 0; i < run.length; i++) {
+      const q = P(run[i]), t = pts[pts.length - 1], last = i === run.length - 1;
+      // 양 끝은 간격과 무관하게 남긴다. 솎다가 조각 하나를 통째로 날리면 그 두 구가 붙는다.
+      if (!t || last || Math.hypot(q[0] - t[0], q[1] - t[1]) >= minGap) pts.push(q);
     }
-    const end = pts[pts.length - 1]; d += `L${end[0].toFixed(2)} ${end[1].toFixed(2)}`;
+    if (pts.length > 1) d += curveD(pts, false);
   }
   return d;
 }
@@ -566,6 +639,7 @@ function updateSvgMap() {
     districtCurrentSvg[i].setAttribute('fill', C.currentFill);
   }
   districtBoundary.setAttribute('d', boundaryPathD());
+  districtBoundary.setAttribute('stroke-width', cutWidth().toFixed(2));
   timeRings.style.display = curT > .02 && mode !== 'diff' ? '' : 'none';
   timeRings.setAttribute('opacity', String(curT));
   for (const item of ringSvg) {

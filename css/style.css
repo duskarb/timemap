@@ -17,7 +17,11 @@
 }
 
 :root{
-  --bg:#fafafa; --map-line:#ececec; --green:#076940; --green-70:rgba(7,105,64,.82); --green-50:rgba(7,105,64,.64);
+  /* --cut 은 구 경계선. 포스터 원본 값(#f4c39c)을 그대로 쓰지 않는다. 원본에서 그 모래색이
+     통하는 건 아래 깔린 채움이 연두+주황이 겹친 겨자색이기 때문이고, 여기 트램 후 화면의
+     옅은 주황 위에서는 명도가 거의 같아 선이 사라진다. 지도 잉크를 옅게 쓰면 연두 위에서도
+     주황 위에서도 또렷하다. 종이 그림자 #ececec 과 혼동하지 말 것. */
+  --bg:#fafafa; --cut:rgba(7,105,64,.45); --green:#076940; --green-70:rgba(7,105,64,.82); --green-50:rgba(7,105,64,.64);
   --green-18:rgba(7,105,64,.18); --lime:#cef00a; --orange:#ff8324; --orange-dark:#ff7105;
   --rail-l:420px; --rail-r:350px; --pad:36px;
   --f-title:'Pear Toucan','페어 큰부리새',Paperlogy,Pretendard,'Apple SD Gothic Neo',sans-serif;
@@ -33,7 +37,9 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #stage{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab;touch-action:none}
 #mapSvg{position:absolute;inset:0;width:100%;height:100%;overflow:hidden;pointer-events:none;z-index:1}
 #districtCurrent path,#districtActive path{stroke:none;fill-rule:evenodd}
-#districtBoundary{fill:none;stroke:var(--map-line);stroke-width:4;stroke-linecap:round;stroke-linejoin:round;
+/* 굵기는 app.js 가 매 프레임 넣는다(지도 폭 비례 + 확대에 완만히 반응).
+   삼거리에서 끝나는 선은 맞대어 끝나야 하므로 butt cap — round 면 끝마다 점이 맺힌다. */
+#districtBoundary{fill:none;stroke:var(--cut);stroke-linecap:butt;stroke-linejoin:round;
   vector-effect:non-scaling-stroke}
 #routeLines path{fill:none;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
 #stationMarks circle{vector-effect:non-scaling-stroke}
