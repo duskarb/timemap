@@ -1,9 +1,11 @@
 /* 대전 시간지도 — 스타일
-   포스터 A1(Figma DDA_design 109:1131)의 색·타이포 토큰을 그대로 씁니다. */
+   포스터 A1 최종본(Figma DDA_design 214:3169 "진짜Final")의 색·타이포 토큰을 그대로 씁니다. */
 
 :root{
-  --bg:#ececec; --green:#2e624c; --green-70:rgba(46,98,76,.7); --green-50:rgba(46,98,76,.5);
-  --green-18:rgba(46,98,76,.18); --lime:#c7ff00; --orange:#ff8324; --orange-dark:#dd7322;
+  --bg:#f1f1f1; --green:#076940; --green-2:#2e624c;
+  --green-70:rgba(7,105,64,.7); --green-50:rgba(7,105,64,.5);
+  --green-18:rgba(7,105,64,.18); --lime:#cef00a; --gold:#e2c414;
+  --orange:#ff7105; --orange-dark:#d95e04; --peach:#f4c29c;
   --rail-l:420px; --rail-r:372px; --pad:36px;
   --f-head:'KIMM Bold','KIMM_Bold',Paperlogy,Pretendard,'Apple SD Gothic Neo',sans-serif;
   --f-ui:Paperlogy,Pretendard,'Apple SD Gothic Neo','Malgun Gothic',sans-serif;
@@ -28,10 +30,10 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #origin .big{font-family:var(--f-head);font-size:30px;line-height:1.1;letter-spacing:-.02em}
 #origin .sub{font-size:12.5px;color:var(--green-50);margin-top:2px}
 #originPick{margin-top:12px;appearance:none;border:1.5px solid var(--green-18);
-  background:rgba(255,255,255,.72) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='7'><path d='M1 1l4 4 4-4' fill='none' stroke='%232e624c' stroke-width='1.6'/></svg>") right 12px center/10px no-repeat;
+  background:rgba(255,255,255,.72) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='7'><path d='M1 1l4 4 4-4' fill='none' stroke='%23076940' stroke-width='1.6'/></svg>") right 12px center/10px no-repeat;
   color:var(--green);font:600 13px var(--f-ui);padding:9px 30px 9px 12px;border-radius:9px;cursor:pointer;width:100%;max-width:230px}
 #ctl{margin-top:auto;display:flex;flex-direction:column;gap:11px}
-.seg{display:inline-flex;background:rgba(46,98,76,.09);border-radius:999px;padding:4px;gap:2px;flex-wrap:wrap}
+.seg{display:inline-flex;background:rgba(7,105,64,.09);border-radius:999px;padding:4px;gap:2px;flex-wrap:wrap}
 .seg button{appearance:none;border:0;background:transparent;color:var(--green-70);
   font:600 13px var(--f-ui);padding:9px 15px;border-radius:999px;cursor:pointer;transition:.18s;white-space:nowrap}
 .seg button:hover{color:var(--green)}
@@ -51,7 +53,7 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 .card h3{margin:0 0 12px;font:600 11.5px var(--f-ui);letter-spacing:.05em;color:var(--green-50)}
 .kpi{display:flex;align-items:flex-end;gap:9px;flex-wrap:wrap}
 .kpi .v{font-family:var(--f-head);font-size:38px;line-height:1;letter-spacing:-.03em}
-.kpi .v.now{color:var(--green)} .kpi .v.tram{color:var(--orange)}
+.kpi .v.now{color:var(--green-2)} .kpi .v.tram{color:var(--orange)}
 .kpi .arrow{font-size:20px;color:var(--green-50);padding-bottom:3px}
 .kpi .u{font-size:13px;font-weight:600;padding-bottom:3px;color:var(--green-70)}
 .gain{margin-top:9px;display:inline-block;background:var(--orange);color:#fff;font:700 12px var(--f-ui);
@@ -75,7 +77,7 @@ td.cut{color:var(--orange);font-weight:700} td.flat{color:var(--green-50)}
 #cutCard{display:none} body[data-view="diff"] #cutCard{display:block}
 body[data-view="diff"] #reachCard{opacity:.5}
 
-#tip{position:fixed;transform:translate(-50%,calc(-100% - 14px));background:rgba(46,98,76,.95);color:#fff;
+#tip{position:fixed;transform:translate(-50%,calc(-100% - 14px));background:rgba(7,105,64,.95);color:#fff;
   border-radius:9px;padding:8px 12px;pointer-events:none;white-space:nowrap;font-size:12px;z-index:9;
   display:flex;flex-direction:column;gap:2px;max-width:70vw}
 #tip b{font-size:13.5px} #tip span{opacity:.75} #tip .t{opacity:1}
@@ -100,7 +102,7 @@ body[data-view="diff"] #reachCard{opacity:.5}
   #originPick{margin-top:0;width:auto;max-width:none;flex:1;min-width:130px;padding:7px 28px 7px 10px;font-size:12.5px}
   #ctl{position:fixed;left:0;right:0;bottom:0;margin:0;
     padding:12px 16px calc(12px + var(--safe-b));gap:8px;
-    background:linear-gradient(to top,var(--bg) 62%,rgba(236,236,236,0));z-index:4}
+    background:linear-gradient(to top,var(--bg) 62%,rgba(241,241,241,0));z-index:4}
   .seg{overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;max-width:100%}
   .seg::-webkit-scrollbar{display:none}
   .seg button{padding:10px 14px;font-size:13px}
@@ -112,7 +114,7 @@ body[data-view="diff"] #reachCard{opacity:.5}
     background:var(--bg);border-top:1.5px solid var(--green-18);border-radius:16px 16px 0 0;
     padding:8px 16px calc(20px + var(--safe-b));gap:12px;
     transform:translateY(101%);transition:transform .3s cubic-bezier(.4,0,.2,1);z-index:6;
-    box-shadow:0 -14px 34px rgba(46,98,76,.14)}
+    box-shadow:0 -14px 34px rgba(7,105,64,.14)}
   body[data-sheet="1"] #railR{transform:none}
   #railR::before{content:'';display:block;width:38px;height:4px;border-radius:2px;
     background:var(--green-18);margin:2px auto 6px;flex:none}
@@ -120,7 +122,7 @@ body[data-view="diff"] #reachCard{opacity:.5}
   #sheetBtn{display:flex;position:fixed;right:16px;bottom:calc(96px + var(--safe-b));z-index:5;
     align-items:center;gap:7px;appearance:none;border:1.5px solid var(--green-18);
     background:rgba(255,255,255,.9);color:var(--green);font:700 12.5px var(--f-ui);
-    padding:10px 15px;border-radius:999px;cursor:pointer;box-shadow:0 6px 18px rgba(46,98,76,.12)}
+    padding:10px 15px;border-radius:999px;cursor:pointer;box-shadow:0 6px 18px rgba(7,105,64,.12)}
   body[data-sheet="1"] #sheetBtn{opacity:0;pointer-events:none}
   #sheetClose{display:block;position:absolute;right:14px;top:12px;appearance:none;border:0;
     background:transparent;color:var(--green-50);font:700 20px var(--f-ui);cursor:pointer;line-height:1}
