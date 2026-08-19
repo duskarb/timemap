@@ -196,6 +196,11 @@ function layout() {
   BOX = { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: Math.max(160, x1 - x0), h: Math.max(160, y1 - y0) };
 }
 
+/** 기본 배율. 1 = 라임 지리 대전이 안전영역에 꽉 맞는 크기.
+ *  1보다 키우면 지도가 제목·레일 아래로 흘러넘친다. view.s 와 별개라
+ *  더블클릭 원위치는 이 배율로 돌아온다. */
+const ZOOM0 = 1;
+
 let geoFit = null;
 function fitGeo() {
   let mnx = 999, mxx = -999, mny = 99, mxy = -99;
@@ -204,7 +209,7 @@ function fitGeo() {
   }
   const pad = VW >= 821 ? 34 : 18;
   const w = (mxx - mnx) * KX, h = (mxy - mny) * KY;
-  const sc = Math.min((BOX.w - 2 * pad) / w, (BOX.h - 2 * pad) / h);
+  const sc = Math.min((BOX.w - 2 * pad) / w, (BOX.h - 2 * pad) / h) * ZOOM0;
   const cx = (mnx + mxx) / 2, cy = (mny + mxy) / 2;
   geoFit = p => ({ x: BOX.cx + (p[0] - cx) * KX * sc, y: BOX.cy - (p[1] - cy) * KY * sc });
 }
@@ -270,7 +275,7 @@ function recompute() {
       minsTram[i] = fieldAt(fTram, PTS[i][0], PTS[i][1]);
     }
   }
-  RMAX = Math.min(BOX.w, BOX.h) / 2 - (VW >= 821 ? 30 : 16);
+  RMAX = (Math.min(BOX.w, BOX.h) / 2 - (VW >= 821 ? 30 : 16)) * ZOOM0;
   for (let i = 0; i < N; i++) {
     const g = geoFit(PTS[i]);
     posGeo[i * 2] = g.x; posGeo[i * 2 + 1] = g.y;
@@ -330,7 +335,8 @@ function settle() { const t = target(mode, scen); cur.set(t); from.set(t); to.se
 /* ---------- 렌더 ---------- */
 /* 포스터 A1 최종본(Figma DDA_design 214:3169 "진짜Final") 팔레트 — css/style.css 의 :root 와 같은 값 */
 const C = { bg: '#f1f1f1', green: '#076940', green2: '#2e624c', lime: '#cef00a',
-            gold: '#e2c414', orange: '#ff7105', orangeDeep: '#8f3a00', ink: '#0b3a26' };
+            gold: '#e2c414', orange: '#ff7105', orangeDeep: '#8f3a00', ink: '#0b3a26',
+            peach: '#f4c29c' };
 const P = (i) => [cur[i * 2] * view.s + view.x, cur[i * 2 + 1] * view.s + view.y];
 
 function poly(f) {
@@ -387,12 +393,29 @@ function ghostPoly(f, src) {
 const isTramOnly = s => s.line === '트램';
 
 /** 시 영역 경로. 채우기·클립 양쪽에서 같은 경로를 써야 선이 면 밖으로 안 나간다. */
-function cityPath() {
+function pathFrom(src) {
   ctx.beginPath();
   for (const f of FEAT) if (f.key === 'city') {
-    for (let j = 0; j < f.n; j++) { const [x, y] = P(f.s + j); j ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+    for (let j = 0; j < f.n; j++) {
+      const i = f.s + j;
+      const x = src[i * 2] * view.s + view.x, y = src[i * 2 + 1] * view.s + view.y;
+      j ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
     ctx.closePath();
   }
+}
+function cityPath() { pathFrom(cur); }
+
+/** 포스터의 출발지 핀(Figma Group 75). 뾰족한 끝이 정거장 좌표에 닿는다. */
+const PIN = new Path2D('M61.7422 0C95.8416 0 123.484 27.6428 123.484 61.7422C123.484 74.2828 119.746 85.9501 113.322 95.6904H113.394L62.7578 167.661L12.5596 99.0713C12.1032 98.471 11.6572 97.8624 11.2227 97.2451L10.085 95.6904H10.1621C3.73846 85.9502 0 74.2827 0 61.7422C0 27.6428 27.6428 0 61.7422 0Z');
+const PIN_DOT = new Path2D('M61.7448 83.9786C76.5875 83.9786 88.6199 71.9461 88.6199 57.1034C88.6199 42.2607 76.5875 30.2283 61.7448 30.2283C46.902 30.2283 34.8696 42.2607 34.8696 57.1034C34.8696 71.9461 46.902 83.9786 61.7448 83.9786Z');
+function drawPin(x, y, h) {
+  const k = h / 167.661;
+  ctx.save();
+  ctx.translate(x - 62.7578 * k, y - 167.661 * k); ctx.scale(k, k);
+  ctx.fillStyle = C.green; ctx.fill(PIN);
+  ctx.fillStyle = '#fff'; ctx.fill(PIN_DOT);
+  ctx.restore();
 }
 
 function draw() {
@@ -400,33 +423,45 @@ function draw() {
   ctx.clearRect(0, 0, VW, VH);
   if (mode === 'diff' && tw > .55) { drawDiff(); return; }
 
+  // 1) 라임 = 실제 크기의 대전. 포스터에서 시간지도가 그 위에서 줄어드는 바탕이 된다.
+  ctx.fillStyle = C.lime;
+  pathFrom(posGeo);
+  ctx.fill();
+
   // 대비 고스트(반대 시나리오)
   if (curT > 0.05) {
     const other = scen === 'tram' ? posNow : posTram;
-    ctx.save(); ctx.globalAlpha = curT * .95;
-    ctx.strokeStyle = scen === 'tram' ? 'rgba(7,105,64,.55)' : 'rgba(255,113,5,.85)';
-    ctx.lineWidth = 2; ctx.setLineDash([6, 5]);
+    ctx.save(); ctx.globalAlpha = curT * .9;
+    ctx.strokeStyle = scen === 'tram' ? 'rgba(7,105,64,.5)' : 'rgba(255,113,5,.8)';
+    ctx.lineWidth = 1.8; ctx.setLineDash([6, 5]);
     for (const f of FEAT) if (f.key === 'city') { ghostPoly(f, other); ctx.stroke(); }
     ctx.setLineDash([]); ctx.restore();
   }
 
-  // 시 영역
-  ctx.fillStyle = scen === 'tram' ? C.orange : C.lime;
-  ctx.globalAlpha = curT > .05 ? .92 : 1;
-  cityPath();
-  ctx.fill();
-  ctx.globalAlpha = 1;
-  ctx.strokeStyle = scen === 'tram' ? 'rgba(7,105,64,.55)' : 'rgba(7,105,64,.45)';
-  ctx.lineWidth = 1.6; ctx.stroke();
+  // 2) 시간지도 = 라임 위 반투명 오버레이. 트램은 rgba(255,131,36,.4) 라서 포스터의 금색
+  //    #e2c414 그대로 나온다. 지리 모드(curT=0)에서는 두 경로가 겹쳐 라임만 남는다.
+  ctx.save();
+  ctx.globalAlpha = curT;
+  ctx.fillStyle = scen === 'tram' ? 'rgba(255,131,36,.4)' : 'rgba(46,98,76,.34)';
+  cityPath(); ctx.fill();
+  ctx.restore();
 
-  // 구 경계 — 시 외곽선과 같은 색. 시 영역으로 클립한다.
+  // 구 경계 — 포스터는 시간지도 안쪽에만 살구색 실선을 둔다. 시 영역으로 클립한다.
   // 시 외곽선은 정점 548개(≈365m 간격)를 직선으로 이어 볼록한 구간이 안쪽으로 잘리는데,
   // 167m 간격인 구 경계 컨투어는 그 현(弦) 바깥으로 삐져나온다(워프 후 최대 7.6px).
   ctx.save();
   cityPath(); ctx.clip();
-  ctx.strokeStyle = scen === 'tram' ? 'rgba(7,105,64,.55)' : 'rgba(7,105,64,.45)';
-  ctx.lineWidth = 2.8;
+  ctx.strokeStyle = curT > .5 ? C.peach : 'rgba(7,105,64,.42)';
+  ctx.globalAlpha = curT > .5 ? curT : 1;
+  ctx.lineWidth = 2.4;
   for (const f of FEAT) if (f.key === 'guc') { smoothPath(f); ctx.stroke(); }
+  ctx.restore();
+
+  // 3) 시간지도 외곽선 — 포스터의 주황 실선
+  ctx.save();
+  ctx.globalAlpha = curT;
+  ctx.strokeStyle = scen === 'tram' ? C.orange : C.green;
+  ctx.lineWidth = 2.4; cityPath(); ctx.stroke();
   ctx.restore();
 
   // 노선
@@ -445,38 +480,41 @@ function draw() {
   for (let i = 0; i < ALL.length; i++) {
     const s = ALL[i], [x, y] = P(NODE_S + i);
     if (isTramOnly(s) && scen === 'now') continue;
-    const isO = i === origin, isH = hover === i;
-    const rr = VW >= 821 ? 3.6 : 4.4;
-    ctx.beginPath(); ctx.arc(x, y, isO ? rr + 4.5 : isH ? rr + 2.5 : rr, 0, 7);
-    ctx.fillStyle = isO ? C.orange : '#fff';
+    if (i === origin) continue;                 // 출발지는 핀으로 그린다
+    const isH = hover === i;
+    const rr = VW >= 821 ? 3.2 : 4.2;
+    ctx.beginPath(); ctx.arc(x, y, isH ? rr + 2.5 : rr, 0, 7);
+    ctx.fillStyle = '#fff';
     ctx.fill();
-    ctx.lineWidth = isO ? 3 : 1.6;
-    ctx.strokeStyle = isO ? C.green : (isTramOnly(s) ? C.orangeDeep : C.green);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = isTramOnly(s) ? C.orangeDeep : C.green;
     ctx.stroke();
   }
 
-  // 시간 링 (채움 위)
+  // 시간 링 (채움 위) — 포스터처럼 초록 점선 + 오른쪽 끝에서 아래로 내린 리더선·라벨
   if (curT > 0.02 && mode !== 'diff') {
-    ctx.save(); ctx.globalAlpha = curT * .8;
+    ctx.save(); ctx.globalAlpha = curT * .85;
     const ccx = BOX.cx * view.s + view.x, ccy = BOX.cy * view.s + view.y;
-    ctx.strokeStyle = 'rgba(11,58,38,.42)'; ctx.setLineDash([4, 6]); ctx.lineWidth = 1.1;
+    const baseY = BOX.cy + BOX.h / 2 - 6, x1 = BOX.cx + BOX.w / 2;
+    ctx.strokeStyle = 'rgba(7,105,64,.55)'; ctx.lineWidth = 1.1;
+    ctx.setLineDash([5, 7]);
     for (const m of RINGS) { const r = radial(m) * view.s;
       ctx.beginPath(); ctx.arc(ccx, ccy, r, 0, 7); ctx.stroke(); }
     ctx.setLineDash([]);
     ctx.font = '700 11.5px Pretendard, sans-serif'; ctx.textAlign = 'center';
     for (const m of RINGS) {
-      const y = ccy - radial(m) * view.s;
-      ctx.fillStyle = 'rgba(241,241,241,.86)';
-      ctx.fillRect(ccx - 21, y - 13, 42, 15);
-      ctx.fillStyle = 'rgba(11,58,38,.75)'; ctx.fillText(m + '분', ccx, y - 2);
+      const x = ccx + radial(m) * view.s;
+      if (x > x1 - 14 || x < BOX.cx - BOX.w / 2 || ccy > baseY - 24) continue;
+      ctx.strokeStyle = 'rgba(7,105,64,.4)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, ccy); ctx.lineTo(x, baseY - 14); ctx.stroke();
+      ctx.fillStyle = 'rgba(7,105,64,.85)'; ctx.fillText(m + '분', x, baseY);
     }
     ctx.restore();
   }
 
-  // 출발지 라벨
+  // 출발지 핀 — 포스터의 물방울 핀. 텍스트는 좌측 레일 '출발지'가 이미 보여준다.
   const [ox, oy] = P(NODE_S + origin);
-  ctx.font = '800 14px Pretendard, sans-serif'; ctx.textAlign = 'left';
-  ctx.fillStyle = C.green; ctx.fillText(ALL[origin].name, ox + 13, oy - 8);
+  drawPin(ox, oy, VW >= 821 ? 34 : 28);
 }
 
 function drawDiff() {
@@ -624,7 +662,8 @@ document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click'
   document.getElementById('ghostNote').textContent =
     mode === 'geo' ? '지리 지도 — 실제 거리 그대로' :
     mode === 'diff' ? '트램으로 줄어드는 시간 — 진할수록 많이 줄어듭니다' :
-    scen === 'tram' ? '점선 = 현재 시간지도 · 면 = 트램 후' : '점선 = 트램 후 시간지도 · 면 = 현재';
+    scen === 'tram' ? '라임 = 실제 크기 대전 · 금색 = 트램 후 시간지도 · 점선 = 현재'
+                    : '라임 = 실제 크기 대전 · 올리브 = 현재 시간지도 · 점선 = 트램 후';
   tweenTo(mode === 'diff' ? 'geo' : mode, scen);
   if (window.innerWidth < 821) document.body.dataset.sheet = '0';
 }));

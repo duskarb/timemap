@@ -32,7 +32,7 @@
         <button data-mode="tram" class="on">시간 · 트램 후</button>
         <button data-mode="diff">단축 시간</button>
       </div>
-      <div id="ghostNote">점선 = 현재 시간지도 · 면 = 트램 후</div>
+      <div id="ghostNote">라임 = 실제 크기 대전 · 금색 = 트램 후 시간지도 · 점선 = 현재</div>
       <div id="hint">정거장 클릭해 출발지 변경 · 스크롤 확대 · 드래그 이동 · 더블클릭 원위치</div>
     </div>
   </div>
@@ -72,8 +72,9 @@
     </div>
 
     <div id="legend">
-      <div class="row"><span class="sw" style="background:#cef00a"></span> 현재 시간지도</div>
-      <div class="row"><span class="sw" style="background:#ff7105"></span> 트램 도입 후 시간지도</div>
+      <div class="row"><span class="sw" style="background:#cef00a"></span> 현 대전 지도 (실제 크기)</div>
+      <div class="row"><span class="sw" style="background:#e2c414;border:1.5px solid #ff7105"></span> 트램 도입 후 시간기반 지도</div>
+      <div class="row"><span class="sw" style="background:#98c020;border:1.5px solid #076940"></span> 현재 시간기반 지도</div>
       <div class="row"><span class="dash"></span> 대비되는 시나리오의 외곽선</div>
       <div class="row" id="diffLegend"><span class="sw" style="background:#cef00a"></span>
         <span class="sw" style="background:#e2c414"></span>
