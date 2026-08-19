@@ -1,110 +1,198 @@
 /* =========================================================================
-   대전 시간지도 — time map 프로젝트(Dijkstra + geo↔time 모프)를 대전 트램에 적용
+   대전 시간지도 — geo↔time 모프 렌더러
+
+   소요시간은 브라우저에서 계산하지 않는다. data/daejeon.js 에 실린 r5py 통행시간
+   행렬(GTFS: TAGO 노선 + 운송사업조합 시간표 + 1호선 + 트램)을 조회할 뿐이다.
+   행렬은 출발지 62개 × 도착지 2204개(격자 2142 + 정거장 62)의 uint8 분값이고,
+   255 는 CAP 분 안에 닿지 못한다는 뜻이다.
    ========================================================================= */
 const D = window.__DAEJEON__;
 const KX = 111.32 * Math.cos(36.363 * Math.PI / 180), KY = 110.574;
 const km = (a, b, c, d) => Math.hypot((a - c) * KX, (b - d) * KY);
-const DET = 1.3;                                  // 직선거리 → 실제 경로 우회계수
-const WALK = D.walkMinPerKm * DET;                // 도보 4.55km/h
-const busMin = d => 10 + d * DET * 3.75 + (d > 5 ? 7 : 0);  // 접근4+대기6 · 16km/h · 5km↑ 환승 7분
-const CAP = 150;   // 시간지도 반경 상한(분). 전 출발지 기준 시 경계 최대치가 135.6분이라 포화되지 않는다.
-                   // (포화되면 외곽이 현재·트램 후 모두 같은 반지름에 붙어 축소가 가려진다)
-const RINGS = [30, 60, 90];
-const access = d => Math.min(d * WALK, busMin(d));
-/** 철도 하차 후 목적지까지. 도보 또는 연계버스(환승도보 2분 + 대기 3분 + 16km/h).
- *  이걸 도보로만 두면 역세권 밖에서는 철도가 영원히 열세라 시간지도가 노선에 반응하지 않는다. */
-const egress = e => Math.min(e * WALK, 5 + e * DET * 3.75);
+const CAP = D.cap;                          // 시간지도 반경 상한(분) = 행렬의 max_time
+const RINGS = [30, 60, 90, 120, 150];
 const easeInOut = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 
-/* ---------- 정거장 · 그래프 ---------- */
-const ALL = [...D.metro, ...D.tram];
-const byId = new Map(ALL.map(s => [s.id, s]));
-function adj(useTram) {
-  const m = new Map();
-  for (const [a, b, w, k] of D.edges) {
-    if (!useTram && k !== 'm1') continue;
-    if (!m.has(a)) m.set(a, []); if (!m.has(b)) m.set(b, []);
-    m.get(a).push([b, w]); m.get(b).push([a, w]);
-  }
-  return m;
+/* ---------- 통행시간 행렬 ---------- */
+const STRIDE = D.stride, NC = D.nCells;
+function unb64(s) {
+  const bin = atob(s), a = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+  return a;
 }
-const ADJ = { now: adj(false), tram: adj(true) };
+const TTM = { now: unb64(D.ttm.before), tram: unb64(D.ttm.after) };
+const raw = (scen, o, col) => TTM[scen][o * STRIDE + col];
+/** 출발지 행 × 도착지 열의 소요시간(분). 미도달(255)은 CAP 으로 접는다. */
+const tt = (scen, o, col) => { const v = raw(scen, o, col); return v === 255 ? CAP : v; };
 
-/** 출발점(lon,lat)에서 모든 정거장까지의 도착시각(분). 다중 시드 다익스트라. */
-function arriveTimes(o, scen) {
-  const use = scen === 'tram';
-  const dist = new Map(); const heap = [];
-  const push = (id, d) => { heap.push([d, id]); let i = heap.length - 1;
-    while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break;
-      [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
-  for (const s of ALL) {
-    if (!use && s.line === '트램') continue;
-    const d = km(o.lon, o.lat, s.lon, s.lat);
-    if (d > 12) continue;
-    const wait = s.line === '트램' ? D.headway.tram / 2 : D.headway.m1 / 2;
-    const t = access(d) + wait;
-    if (t < 100) { dist.set(s.id, t); push(s.id, t); }
-  }
-  const A = ADJ[scen];
-  while (heap.length) {
-    const top = heap[0]; const last = heap.pop();
-    if (heap.length) { heap[0] = last; let i = 0;
-      for (;;) { const l = 2 * i + 1, r = l + 1; let m = i;
-        if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
-        if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
-        if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } }
-    const [d, id] = top;
-    if (d > (dist.get(id) ?? Infinity)) continue;
-    for (const [to, w] of A.get(id) ?? []) {
-      const nd = d + w;
-      if (nd < (dist.get(to) ?? Infinity)) { dist.set(to, nd); push(to, nd); }
+const ALL = D.stations;                     // 1호선 22 + 트램 45, 환승역 5쌍 병합 → 62
+
+/* ---------- 격자 래티스 ----------
+   시간지도는 정점마다 각도=실제 방위, 반지름=소요시간으로 찍는다. 소요시간 격자가
+   거칠면(붙어 있는 0.5km 셀끼리 최대 56분 차이) 이웃 정점의 반지름이 튀어 경계선이
+   접힌다. 그래서 (1) 시간장을 격자 위에서 먼저 평활하고 (2) 모든 지오메트리는 그
+   평활된 장을 좌표로만 조회한다. 정점이 "내가 어느 링 소속인지"를 보지 않으므로
+   좌표가 같은 정점은 언제나 같은 위치로 간다 = 공유 경계가 갈라지지 않는다. */
+const DLON = 0.00556, DLAT = 0.00451;       // 격자 간격(≈0.5km). build_webproto.py 와 맞춘 값
+const FIELD_SMOOTH = 20;                    // 시간장 평활 반복수
+const FIELD_R = 2;                          // 조회 커널 반경(셀). ±2셀 ≈ ±1km
+const SUB = 3;                              // 구 경계 컨투어 세분 배수(≈167m)
+let GLON0 = Infinity, GLAT0 = Infinity;
+for (const g of D.grid) { if (g[0] < GLON0) GLON0 = g[0]; if (g[1] < GLAT0) GLAT0 = g[1]; }
+const lx = lon => Math.round((lon - GLON0) / DLON), ly = lat => Math.round((lat - GLAT0) / DLAT);
+const CK = (a, b) => a + ',' + b;
+const CELL = new Map();                     // "ix,iy" → 격자 셀 인덱스
+D.grid.forEach((g, i) => CELL.set(CK(lx(g[0]), ly(g[1])), i));
+const CNB = D.grid.map(g => {
+  const a = lx(g[0]), b = ly(g[1]);
+  return [[1, 0], [-1, 0], [0, 1], [0, -1]]
+    .map(([dx, dy]) => CELL.get(CK(a + dx, b + dy))).filter(j => j !== undefined);
+});
+
+const fNow = new Float64Array(NC), fTram = new Float64Array(NC);
+const fBuf = new Float64Array(NC);
+/** 격자 시간장을 이웃 평균으로 평활한다. 스파이크를 없애야 경계선이 안 접힌다. */
+function smoothField(scen, o, out) {
+  for (let i = 0; i < NC; i++) out[i] = tt(scen, o, i);
+  for (let k = 0; k < FIELD_SMOOTH; k++) {
+    for (let i = 0; i < NC; i++) {
+      const nb = CNB[i];
+      if (!nb.length) { fBuf[i] = out[i]; continue; }
+      let s = 0; for (const j of nb) s += out[j];
+      fBuf[i] = out[i] * 0.5 + 0.5 * s / nb.length;
     }
+    out.set(fBuf);
   }
-  return dist;
+}
+/** 임의 좌표의 소요시간(분). 반경 FIELD_R 셀의 역거리 가중 평균. */
+function fieldAt(f, lon, lat) {
+  const ix = lx(lon), iy = ly(lat);
+  let acc = 0, w = 0;
+  for (let dx = -FIELD_R; dx <= FIELD_R; dx++) for (let dy = -FIELD_R; dy <= FIELD_R; dy++) {
+    const c = CELL.get(CK(ix + dx, iy + dy)); if (c === undefined) continue;
+    const g = D.grid[c];
+    const d = Math.hypot((lon - g[0]) * KX, (lat - g[1]) * KY);
+    const ww = 1 / (d * d + 0.01);
+    acc += f[c] * ww; w += ww;
+  }
+  return w > 0 ? acc / w : CAP;
 }
 
-/** 임의 지점까지의 소요시간(분) = min(도보, 버스, 철도 + 하차 후 도보/연계버스) */
-function makeModel(o, arrive) {
-  const st = [];
-  for (const [id, t] of arrive) { const s = byId.get(id); st.push([s.lon, s.lat, t]); }
-  return (lon, lat) => {
-    const d = km(o.lon, o.lat, lon, lat);
-    let best = access(d);
-    for (let i = 0; i < st.length; i++) {
-      const t = st[i][2]; if (t >= best) continue;
-      const e = egress(km(st[i][0], st[i][1], lon, lat));
-      if (t + e < best) best = t + e;
+/* ---------- 구 경계 = 격자 라벨 컨투어 ----------
+   원본 구 폴리곤을 정점마다 투영하면, 링마다 따로 매끈하게 만들 수밖에 없어서 공유
+   경계가 두 줄로 갈라진다. 대신 세분 격자에 "이 점은 어느 구인가"를 칠하고, 라벨이
+   바뀌는 격자 엣지만 뽑는다. 두 구가 맞닿은 곳의 엣지는 하나뿐이라 갈라질 수 없다. */
+function inRing(x, y, r) {
+  let c = false;
+  for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+    const [xi, yi] = r[i], [xj, yj] = r[j];
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) c = !c;
+  }
+  return c;
+}
+function guContours() {
+  let mnx = Infinity, mxx = -Infinity, mny = Infinity, mxy = -Infinity;
+  for (const k of CELL.keys()) {
+    const [a, b] = k.split(',');
+    mnx = Math.min(mnx, +a); mxx = Math.max(mxx, +a);
+    mny = Math.min(mny, +b); mxy = Math.max(mxy, +b);
+  }
+  // 링마다 bbox 를 먼저 걸러야 2만 개 노드 × 5링 점-다각형 검사가 느려지지 않는다.
+  const BB = D.gu.map(([r]) => {
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const [x, y] of r) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    return [x0, x1, y0, y1];
+  });
+  const lab = new Map();                    // 세분 노드 "a,b" → 구 인덱스(-1 = 시 밖)
+  const hole = new Set();                   // 시 안쪽인데 어느 구에도 안 들어간 노드
+  for (let a = mnx * SUB; a <= (mxx + 1) * SUB; a++) for (let b = mny * SUB; b <= (mxy + 1) * SUB; b++) {
+    const lon = GLON0 + a * DLON / SUB, lat = GLAT0 + b * DLAT / SUB;
+    // 가장 가까운 격자 셀만 보면 안 된다. 0.5km 격자는 시 경계를 거칠게 잘라 낸 것이라
+    // 시 안쪽인데도 제 셀이 없는 지점이 생기고, 거기서 구 경계선이 끊긴다. ±1셀까지 본다.
+    const ix = lx(lon), iy = ly(lat);
+    let near = false;
+    for (let dx = -1; dx <= 1 && !near; dx++) for (let dy = -1; dy <= 1; dy++)
+      if (CELL.has(CK(ix + dx, iy + dy))) { near = true; break; }
+    if (!near) continue;
+    let l = -1;
+    for (let k = 0; k < D.gu.length; k++) {
+      const [x0, x1, y0, y1] = BB[k];
+      if (lon < x0 || lon > x1 || lat < y0 || lat > y1) continue;
+      if (inRing(lon, lat, D.gu[k][0])) { l = k; break; }
     }
-    return best;
+    lab.set(CK(a, b), l);
+    if (l < 0 && inRing(lon, lat, D.city[0][0])) hole.add(CK(a, b));
+  }
+  // 구 폴리곤 5개의 합집합이 시 폴리곤을 다 덮지 않는다(OSM 경계를 각각 단순화한 탓).
+  // 그 틈이 시 안쪽 4.8km 지점까지 파고들어 거기서 구 경계선이 끊긴다. 이웃 구로 메운다.
+  for (let pass = 0; hole.size && pass < 40; pass++) {
+    let filled = 0;
+    for (const k of [...hole]) {
+      const [a, b] = k.split(',').map(Number);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const m = lab.get(CK(a + dx, b + dy));
+        if (m >= 0) { lab.set(k, m); hole.delete(k); filled++; break; }
+      }
+    }
+    if (!filled) break;
+  }
+  // 라벨이 다른 이웃 사이의 듀얼 엣지. 끝점은 반정수 격자점이라 좌표가 정확히 일치한다.
+  const adj = new Map();                    // 코너 "a,b" → 이웃 코너 배열
+  const link = (p, q) => {
+    if (!adj.has(p)) adj.set(p, []);
+    adj.get(p).push(q);
   };
+  for (const [k, la] of lab) {
+    const [a, b] = k.split(',').map(Number);
+    for (const [dx, dy, pa, pb, qa, qb] of [[1, 0, a, b - 1, a, b], [0, 1, a - 1, b, a, b]]) {
+      const lb = lab.get(CK(a + dx, b + dy));
+      if (lb === undefined || lb === la || la < 0 || lb < 0) continue;
+      const p = CK(pa, pb), q = CK(qa, qb);
+      link(p, q); link(q, p);
+    }
+  }
+  // 엣지를 이어 폴리라인으로. 갈래가 3개 이상인 삼거리는 거기서 끊는다.
+  const used = new Set();
+  const eid = (p, q) => p < q ? p + '|' + q : q + '|' + p;
+  const xy = k => { const [a, b] = k.split(',').map(Number);
+    return [GLON0 + (a + 0.5) * DLON / SUB, GLAT0 + (b + 0.5) * DLAT / SUB]; };
+  const walk = start => {
+    const chain = [start]; let cur = start;
+    for (;;) {
+      const nxt = (adj.get(cur) || []).find(n => !used.has(eid(cur, n)));
+      if (nxt === undefined) break;
+      used.add(eid(cur, nxt)); chain.push(nxt); cur = nxt;
+      if (cur === start) break;
+    }
+    return chain;
+  };
+  const out = [];
+  const keys = [...adj.keys()];
+  for (const pass of [1, 2]) for (const k of keys) {           // 1차: 끝점/삼거리에서 시작, 2차: 남은 고리
+    const deg = adj.get(k).length;
+    if (pass === 1 ? deg === 2 : false) continue;
+    while ((adj.get(k) || []).some(n => !used.has(eid(k, n)))) {
+      const chain = walk(k);
+      if (chain.length > 2) out.push([chain.map(xy), chain[0] === chain[chain.length - 1]]);
+    }
+  }
+  return out;
 }
 
 /* ---------- 좌표계 ---------- */
 const cvs = document.getElementById('stage'), ctx = cvs.getContext('2d');
-const mapTransform = document.getElementById('mapTransform');
-const districtCurrent = document.getElementById('districtCurrent');
-const districtActive = document.getElementById('districtActive');
-const cityCurrentFill = document.getElementById('cityCurrentFill');
-const cityActiveFill = document.getElementById('cityActiveFill');
-const districtBoundary = document.getElementById('districtBoundary');
-const timeRings = document.getElementById('timeRings');
-const routeLines = document.getElementById('routeLines');
-const stationMarks = document.getElementById('stationMarks');
-const originPinMark = document.getElementById('originPinMark');
-const SVG_NS = 'http://www.w3.org/2000/svg';
 let VW = 0, VH = 0, DPR = 1;
 let view = { s: 1, x: 0, y: 0 };
-let zoomTarget = { ...view }, zoomAnim = null, zoomTimer = 0;
 
-/** 첫 화면의 약 70%를 지도 그래픽이 차지하는 포스터형 무대.
- *  레일 사이의 남은 칸에 지도를 가두지 않고, 제목 뒤에서 우측 지표 직전까지 크게 흘린다. */
+/** 좌·우 레일과 하단 컨트롤을 뺀 지도 안전영역. 지도는 항상 이 박스 중앙에 놓인다. */
 let BOX = { cx: 0, cy: 0, w: 0, h: 0 };
 function layout() {
   const wide = VW >= 1241, mid = VW >= 821;
-  const x0 = mid ? (wide ? VW * .08 : VW * .12) : 8;
-  const x1 = mid ? (wide ? VW - 350 : VW - 245) : VW - 8;
-  const y0 = mid ? -VH * .08 : 104;
-  const y1 = mid ? VH * 1.08 : VH - 116;
+  const L = mid ? (wide ? 420 : 320) : 12;
+  const R = mid ? (wide ? 372 : 300) : 12;
+  const T = mid ? 40 : 128;
+  const B = mid ? 40 : 138;
+  const x0 = L, x1 = VW - R, y0 = T, y1 = VH - B;
   BOX = { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: Math.max(160, x1 - x0), h: Math.max(160, y1 - y0) };
 }
 
@@ -114,37 +202,28 @@ function fitGeo() {
   for (const [pts] of D.city) for (const [x, y] of pts) {
     if (x < mnx) mnx = x; if (x > mxx) mxx = x; if (y < mny) mny = y; if (y > mxy) mxy = y;
   }
-  const pad = VW >= 821 ? 10 : 8;
+  const pad = VW >= 821 ? 34 : 18;
   const w = (mxx - mnx) * KX, h = (mxy - mny) * KY;
-  const sc = Math.min((BOX.w - 2 * pad) / w, (BOX.h - 2 * pad) / h) * GEO_FILL;
+  const sc = Math.min((BOX.w - 2 * pad) / w, (BOX.h - 2 * pad) / h);
   const cx = (mnx + mxx) / 2, cy = (mny + mxy) / 2;
   geoFit = p => ({ x: BOX.cx + (p[0] - cx) * KX * sc, y: BOX.cy - (p[1] - cy) * KY * sc });
-  GEO_SC = sc;                                     // px per km — 단축시간 격자 셀 크기에 쓴다
-  GEO_AREA = CITY_KM2 * sc * sc;                   // 지리 지도로 그려진 대전의 픽셀 면적
-  BOXR = Math.min(BOX.w - 2 * pad, BOX.h - 2 * pad) / 2;   // 시간지도가 쓸 수 있는 반지름 예산
 }
 
-/** 반경 스케일 = 분 × 고정 축척(선형).
- *  두 단계의 '줄어드는 정도'를 의도한 대로 벌린다.
- *   · 지리 → 현재 시간지도 : 약하게. 현재 시간지도 면적을 지리 지도 면적의 NOW_VS_GEO 로 맞춘다.
- *   · 현재 → 트램 후       : 세게. 두 시간지도가 같은 축척을 쓰므로 면적비 = 실제 시간비의 제곱.
- *  선형(제곱 1.0)이라 화면에 그려진 면적비가 곧 오른쪽 카드의 숫자다. */
-const POW = 1;
-/* 시간지도 블롭은 출발지에서 멀리 뻗어 길쭉하다. 반지름 예산 안에 다 넣으면 면적이
-   지리 지도의 55~70%밖에 안 돼, 지리→현재 단계가 현재→트램 단계보다 커져 버린다.
-   그래서 지리 지도를 안전영역의 84%까지 키우되 첫 단계의 면적비는 유지한다. */
-const GEO_FILL = 0.98;
-const NOW_VS_GEO = 0.88;  // 현재 시간지도 면적 ÷ 지리 지도 면적
-let GEO_AREA = 1, GEO_SC = 20, BOXR = 300, RMAX = 300, RFILL = 260, TREF = 90;
-const radial = m => Math.min(RMAX, RFILL * Math.pow(Math.min(m, CAP) / TREF, POW));
+/** 반경 스케일: 선형이면 가까운 정거장이 중심에 뭉쳐 노선이 쭈그러든다.
+ *  0.68제곱으로 안쪽을 펴 준다(원본 time map 프로젝트의 sqrt 스케일과 같은 취지). */
+const POW = 0.68;
+let RMAX = 300;
+const radial = m => RMAX * Math.pow(Math.min(m, CAP) / CAP, POW);
 function timePos(lon, lat, minutes, o) {
   const dx = (lon - o.lon) * KX, dy = (lat - o.lat) * KY;
   const th = Math.atan2(dy, dx), r = radial(minutes);
   return { x: BOX.cx + r * Math.cos(th), y: BOX.cy - r * Math.sin(th) };
 }
 
-/* ---------- 지오메트리 평탄화 ---------- */
-const FEAT = [];   // {key, closed, idx:[start,len]}
+/* ---------- 지오메트리 평탄화 ----------
+   PTS 순서: 시 경계 → 구 라벨 → 정거장 → 구 경계 컨투어. 정거장만 행렬에 자기 열이
+   있어 NC + 인덱스로 바로 찾고, 나머지는 전부 평활된 시간장을 좌표로 조회한다. */
+const FEAT = [];   // {key, closed, s:start, n:len}
 const PTS = [];    // [lon,lat]
 function addSet(key, arr) {
   for (const [pts, closed] of arr) {
@@ -152,243 +231,86 @@ function addSet(key, arr) {
     for (const p of pts) PTS.push(p);
   }
 }
-addSet('city', D.city);
-addSet('gu', D.gu);
-
-/* 각 구의 전체 외곽선을 모두 그리면 서로 조금씩 어긋난 공유 경계가 두세 줄로 보인다.
-   지리 좌표에서 서로 220m 안에 있는 공유 변만 골라 한쪽 구의 선으로 합친다. */
-const GU_FEAT = FEAT.filter(f => f.key === 'gu');
-function pointSegmentKm(p, a, b) {
-  const px = p[0] * KX, py = p[1] * KY;
-  const ax = a[0] * KX, ay = a[1] * KY, bx = b[0] * KX, by = b[1] * KY;
-  const vx = bx - ax, vy = by - ay, wx = px - ax, wy = py - ay;
-  const t = Math.max(0, Math.min(1, (wx * vx + wy * vy) / (vx * vx + vy * vy || 1)));
-  return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
-}
-function sharedRuns(a, b) {
-  const mark = new Array(a.n).fill(false);
-  for (let k = 0; k < a.n; k++) {
-    const p = PTS[a.s + k], q = PTS[a.s + (k + 1) % a.n];
-    const mid = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
-    let nearest = Infinity;
-    for (let j = 0; j < b.n; j++) {
-      nearest = Math.min(nearest, pointSegmentKm(mid, PTS[b.s + j], PTS[b.s + (j + 1) % b.n]));
-    }
-    mark[k] = nearest < .22;
-  }
-  // 좌표 정밀도 차이로 한두 변만 빠진 틈은 공유 경계 안에서 닫아 끊김을 없앤다.
-  for (let pass = 0; pass < 2; pass++) {
-    const fill = [];
-    for (let k = 0; k < a.n; k++) {
-      if (!mark[k] && mark[(k - 1 + a.n) % a.n] && mark[(k + 1) % a.n]) fill.push(k);
-    }
-    for (const k of fill) mark[k] = true;
-  }
-  const runs = [];
-  let start = mark.findIndex((v, k) => v && !mark[(k - 1 + a.n) % a.n]);
-  if (start < 0) return runs;
-  let walked = 0, k = start;
-  while (walked < a.n) {
-    if (!mark[k]) { k = (k + 1) % a.n; walked++; continue; }
-    const run = [a.s + k];
-    while (walked < a.n && mark[k]) {
-      run.push(a.s + (k + 1) % a.n);
-      k = (k + 1) % a.n; walked++;
-    }
-    if (run.length > 1) runs.push(run);
-  }
-  return runs;
-}
-const GU_CUTS = [];
-for (let i = 0; i < GU_FEAT.length; i++) {
-  for (let j = i + 1; j < GU_FEAT.length; j++) GU_CUTS.push(...sharedRuns(GU_FEAT[i], GU_FEAT[j]));
-}
-
-/* 출력용 구 경계는 GIS 꼭짓점을 그대로 쓰지 않는다. 180m 이하의 미세 굴곡을 덜어내고,
-   1.1km보다 짧은 파편은 버린 뒤 하나의 안정된 중심선으로만 그린다. */
-function geoPoint(i) { return [PTS[i][0] * KX, PTS[i][1] * KY]; }
-function pointSegSq(p, a, b) {
-  const vx = b[0] - a[0], vy = b[1] - a[1];
-  const wx = p[0] - a[0], wy = p[1] - a[1];
-  const t = Math.max(0, Math.min(1, (wx * vx + wy * vy) / (vx * vx + vy * vy || 1)));
-  const dx = p[0] - (a[0] + vx * t), dy = p[1] - (a[1] + vy * t);
-  return dx * dx + dy * dy;
-}
-function simplifyIndexRun(run, tolerance) {
-  if (run.length < 3) return run.slice();
-  const keep = new Uint8Array(run.length); keep[0] = keep[run.length - 1] = 1;
-  const stack = [[0, run.length - 1]], tol2 = tolerance * tolerance;
-  while (stack.length) {
-    const [a, b] = stack.pop(); const pa = geoPoint(run[a]), pb = geoPoint(run[b]);
-    let far = -1, farD = tol2;
-    for (let i = a + 1; i < b; i++) {
-      const d = pointSegSq(geoPoint(run[i]), pa, pb);
-      if (d > farD) { farD = d; far = i; }
-    }
-    if (far >= 0) { keep[far] = 1; stack.push([a, far], [far, b]); }
-  }
-  return run.filter((_, i) => keep[i]);
-}
-function runKm(run) {
-  let d = 0;
-  for (let i = 1; i < run.length; i++) {
-    const a = geoPoint(run[i - 1]), b = geoPoint(run[i]);
-    d += Math.hypot(b[0] - a[0], b[1] - a[1]);
-  }
-  return d;
-}
-const GU_DRAW = GU_CUTS.filter(run => runKm(run) >= 1.1).map(run => simplifyIndexRun(run, .18));
-
-/** 대전 시역의 실제 면적(km²) — 신발끈. 지리 지도와 시간지도의 면적을 맞출 때 쓴다. */
-const CITY_KM2 = (() => {
-  let s = 0;
-  for (const [pts] of D.city) for (let i = 0, n = pts.length; i < n; i++) {
-    const a = pts[i], b = pts[(i + 1) % n];
-    s += (a[0] * KX) * (b[1] * KY) - (b[0] * KX) * (a[1] * KY);
-  }
-  return Math.abs(s) / 2;
-})();
+addSet('city', D.city);                       // 노선은 D.routes(정거장 시퀀스)로 그린다
+const GU_S = PTS.length;
+for (const g of D.guLabels) PTS.push([g.lon, g.lat]);
 const NODE_S = PTS.length;
 for (const s of ALL) PTS.push([s.lon, s.lat]);
+const CONT_S = PTS.length;
+addSet('guc', guContours());                  // 구 경계 = 격자 라벨 컨투어
 const N = PTS.length;
 
-/* ---------- 출력 노선 ----------
-   시간 왜곡에서 OSM의 촘촘한 정점을 그대로 변환하면 선이 톱니처럼 꺾인다.
-   정거장 순서만 유지한 중심형 SVG 곡선으로 노선의 시각적 연속성을 우선한다. */
-const TI = new Map(D.tram.map((t, i) => [t.code, D.metro.length + i]));
-const ROUTES = [
-  { kind: 'm1', closed: false, idx: D.metro.map((_, i) => i) },
-  { kind: 'tram', closed: true, idx: Array.from({ length: 40 }, (_, i) => TI.get(201 + i)) },
-  { kind: 'tram', closed: false, idx: [TI.get(212), TI.get(241), TI.get(242), TI.get(243), TI.get(244)] },
-  { kind: 'tram', closed: false, idx: [TI.get(233), TI.get(245)] },
-].map(r => ({ ...r, idx: r.idx.filter(v => v !== undefined) }));
-
 /* ---------- 상태 ---------- */
-/* 기본 출발지는 트램이 실제로 격차를 메우는 곳으로 둔다(관저동 — 현재 철도 없음).
-   1호선 역에서 출발하면 트램 전후 차이가 3~5%라 '줄어드는 도시'가 보이지 않는다. */
-let origin = ALL.find(s => s.name === '관저네거리') || D.metro.find(s => s.name === '정부청사') || D.metro[10];
+let origin = ALL.findIndex(s => s.name === '정부청사역');
+if (origin < 0) origin = 0;
 let scen = 'tram';                  // 'now' | 'tram'
-let mode = 'time';                  // 'geo' | 'time' | 'diff'
-let model = { now: null, tram: null }, arrive = { now: null, tram: null };
+let mode = 'geo';                   // 'geo' | 'time' | 'diff'
 const minsNow = new Float32Array(N), minsTram = new Float32Array(N);
 const posGeo = new Float32Array(N * 2), posNow = new Float32Array(N * 2), posTram = new Float32Array(N * 2);
 const cur = new Float32Array(N * 2), from = new Float32Array(N * 2), to = new Float32Array(N * 2);
 let tw = 1, fromT = 0, toT = 0, curT = 0;   // 모프 진행도 / time-amount
 let stats = null, hover = null;
-const GN = D.grid.length;
+const GN = NC;
 const gridXY = new Float32Array(GN * 2);    // 그리드 지리 좌표(모프 없음)
 const gridCut = new Float32Array(GN);       // 트램으로 줄어드는 시간(분)
 
-/** 시간지도에서 경계선의 반지름만 순환 평활화한다. 각도(실제 방위)는 건드리지 않는다. */
-function smoothRadius(pos) {
-  for (const f of FEAT) {
-    if (f.key !== 'city' && f.key !== 'gu') continue;
-    const n = f.n; if (n < 6) continue;
-    const th = new Float64Array(n), r = new Float64Array(n);
-    for (let j = 0; j < n; j++) {
-      const dx = pos[(f.s + j) * 2] - BOX.cx, dy = BOX.cy - pos[(f.s + j) * 2 + 1];
-      r[j] = Math.hypot(dx, dy); th[j] = Math.atan2(dy, dx);
-    }
-    const t = new Float64Array(n);
-    for (let it = 0; it < 4; it++) {
-      for (let j = 0; j < n; j++) {
-        const a = f.closed ? (j - 1 + n) % n : Math.max(0, j - 1);
-        const b = f.closed ? (j + 1) % n : Math.min(n - 1, j + 1);
-        t[j] = r[j] * 0.5 + (r[a] + r[b]) * 0.25;
-      }
-      r.set(t);
-    }
-    for (let j = 0; j < n; j++) {
-      pos[(f.s + j) * 2] = BOX.cx + r[j] * Math.cos(th[j]);
-      pos[(f.s + j) * 2 + 1] = BOX.cy - r[j] * Math.sin(th[j]);
-    }
-  }
-}
-
-/** 분→px 축척을 '현재' 시나리오 하나로 고정한다. 트램 후 지도는 같은 축척으로 그리므로
- *  크기 차이가 곧 시간 단축이다. 축척은 두 조건 중 빡빡한 쪽을 따른다.
- *    (a) 현재 시간지도 면적 = 지리 지도 면적 × NOW_VS_GEO  ← 보통 이쪽이 잡힌다
- *    (b) 시간지도 외곽(p99)이 반지름 예산 안에 들어올 것    ← 넘칠 때만 잡힌다 */
-const CITY_IDX = [];
-for (const f of FEAT) if (f.key === 'city') for (let j = 0; j < f.n; j++) CITY_IDX.push(f.s + j);
-function calibrate() {
-  const v = CITY_IDX.map(i => minsNow[i]).sort((a, b) => a - b);
-  TREF = Math.max(30, Math.min(CAP, v[Math.floor(v.length * 0.99)] || CAP));
-  RFILL = 1; RMAX = Infinity;                       // 단위 축척으로 시간지도 면적을 먼저 잰다
-  const unit = tmAreaPx(minsNow);
-  const kArea = Math.sqrt(NOW_VS_GEO * GEO_AREA / Math.max(unit, 1e-9));
-  const kFit = BOXR / Math.pow(Math.min(v[v.length - 1], CAP) / TREF, POW);
-  RFILL = Math.min(kArea, kFit);
-  RMAX = BOXR;
-}
-
 function recompute() {
-  for (const k of ['now', 'tram']) {
-    arrive[k] = arriveTimes(origin, k);
-    model[k] = makeModel(origin, arrive[k]);
-  }
+  const o = ALL[origin];
+  // 링별 반지름 평활은 없앴다. 링마다 따로 돌면 두 구가 공유하는 정점이 서로 다른
+  // 반지름을 받아 같은 경계가 두 줄로 갈라진다(최대 18px). 대신 격자 시간장을 평활한다.
+  smoothField('now', origin, fNow);
+  smoothField('tram', origin, fTram);
   for (let i = 0; i < N; i++) {
-    minsNow[i] = model.now(PTS[i][0], PTS[i][1]);
-    minsTram[i] = model.tram(PTS[i][0], PTS[i][1]);
+    if (i >= NODE_S && i < CONT_S) {        // 정거장은 행렬에 자기 열이 있다
+      const col = NC + (i - NODE_S);
+      minsNow[i] = tt('now', origin, col);
+      minsTram[i] = tt('tram', origin, col);
+    } else {
+      minsNow[i] = fieldAt(fNow, PTS[i][0], PTS[i][1]);
+      minsTram[i] = fieldAt(fTram, PTS[i][0], PTS[i][1]);
+    }
   }
-  calibrate();
+  RMAX = Math.min(BOX.w, BOX.h) / 2 - (VW >= 821 ? 30 : 16);
   for (let i = 0; i < N; i++) {
     const g = geoFit(PTS[i]);
     posGeo[i * 2] = g.x; posGeo[i * 2 + 1] = g.y;
-    const a = timePos(PTS[i][0], PTS[i][1], minsNow[i], origin);
+    const a = timePos(PTS[i][0], PTS[i][1], minsNow[i], o);
     posNow[i * 2] = a.x; posNow[i * 2 + 1] = a.y;
-    const b = timePos(PTS[i][0], PTS[i][1], minsTram[i], origin);
+    const b = timePos(PTS[i][0], PTS[i][1], minsTram[i], o);
     posTram[i * 2] = b.x; posTram[i * 2 + 1] = b.y;
   }
-  smoothRadius(posNow); smoothRadius(posTram);
   for (let i = 0; i < GN; i++) {
-    const [lo, la] = D.grid[i];
-    const g = geoFit([lo, la]); gridXY[i * 2] = g.x; gridXY[i * 2 + 1] = g.y;
-    const a = model.now(lo, la), b = model.tram(lo, la);
-    gridCut[i] = Math.max(0, a - b);
+    const g = geoFit(D.grid[i]); gridXY[i * 2] = g.x; gridXY[i * 2 + 1] = g.y;
+    gridCut[i] = Math.max(0, tt('now', origin, i) - tt('tram', origin, i));
   }
   computeStats();
 }
 
-/** 화면에 그려지는 시간지도(시 경계선)의 픽셀 면적 — 극좌표 신발끈.
- *  r 은 실제로 찍히는 radial(분), θ 는 실제 방위. 그래서 이 값의 비 = 눈에 보이는 면적비다. */
-function tmAreaPx(mins) {
-  let sum = 0;
-  for (const f of FEAT) {
-    if (f.key !== 'city') continue;
-    for (let j = 0; j < f.n; j++) {
-      const a = f.s + j, b = f.s + (j + 1) % f.n;
-      const t1 = Math.atan2((PTS[a][1] - origin.lat) * KY, (PTS[a][0] - origin.lon) * KX);
-      const t2 = Math.atan2((PTS[b][1] - origin.lat) * KY, (PTS[b][0] - origin.lon) * KX);
-      let dt = t2 - t1;
-      while (dt > Math.PI) dt -= 2 * Math.PI;
-      while (dt < -Math.PI) dt += 2 * Math.PI;
-      sum += 0.5 * radial(mins[a]) * radial(mins[b]) * Math.sin(dt);
-    }
-  }
-  return Math.abs(sum);
-}
+const DEST = ['정부청사역', '대전역', '유성온천역', '대전복합터미널', '관저네거리', '진잠네거리'];
 
 function computeStats() {
-  const c = D.cellKm2; let a30n = 0, a30t = 0, a45n = 0, a45t = 0;
-  for (const [lo, la] of D.grid) {
-    const n = model.now(lo, la), t = model.tram(lo, la);
+  let a30n = 0, a30t = 0, a45n = 0, a45t = 0;
+  for (let i = 0; i < GN; i++) {
+    const c = D.cellKm2[i], n = tt('now', origin, i), t = tt('tram', origin, i);
     if (n <= 30) a30n += c; if (t <= 30) a30t += c;
     if (n <= 45) a45n += c; if (t <= 45) a45t += c;
   }
-  const dest = ['정부청사', '대전역', '유성온천', '대전복합터미널', '관저', '진잠네거리'];
-  const rows = dest.map(nm => {
-    const s = ALL.find(x => x.name === nm) || ALL.find(x => x.name.startsWith(nm));
-    return { name: nm, now: model.now(s.lon, s.lat), tram: model.tram(s.lon, s.lat) };
-  }).filter(r => r.name !== origin.name).slice(0, 5);
-  let cutSum = 0, cutMax = 0, cutCells = 0;
-  for (let i = 0; i < GN; i++) { const v = gridCut[i];
-    if (v > 0.6) { cutCells++; cutSum += v; if (v > cutMax) cutMax = v; } }
-  const areaNow = tmAreaPx(minsNow);
-  const shrink = 1 - tmAreaPx(minsTram) / areaNow;
-  const geoStep = 1 - areaNow / GEO_AREA;   // 지리 → 현재 단계의 축소(설계상 NOW_VS_GEO)
-  stats = { a30n, a30t, a45n, a45t, rows, shrink, geoStep,
-            cutArea: cutCells * D.cellKm2, cutAvg: cutCells ? cutSum / cutCells : 0, cutMax };
+  const rows = DEST.map(nm => {
+    const i = ALL.findIndex(x => x.name === nm);
+    return i < 0 ? null
+      : { name: nm, now: tt('now', origin, NC + i), tram: tt('tram', origin, NC + i) };
+  }).filter(r => r && r.name !== ALL[origin].name).slice(0, 5);
+  // 단축 면적은 셀마다 면적이 다르므로 개수 × 상수로 셀 수 없다(경계에 걸친 셀은 작다).
+  // 최대 단축은 두 시나리오 모두 CAP 아래인 셀에서만 센다. CAP 에 잘린 셀은 실제
+  // 시간이 얼마든 CAP 으로 접히므로, 차이를 그대로 쓰면 없는 단축이 생긴다.
+  let cutSum = 0, cutMax = 0, cutCells = 0, cutArea = 0;
+  for (let i = 0; i < GN; i++) {
+    const v = gridCut[i]; if (v <= 0.6) continue;
+    cutCells++; cutSum += v; cutArea += D.cellKm2[i];
+    if (v > cutMax && raw('now', origin, i) < CAP && raw('tram', origin, i) < CAP) cutMax = v;
+  }
+  stats = { a30n, a30t, a45n, a45t, rows,
+            cutArea, cutAvg: cutCells ? cutSum / cutCells : 0, cutMax };
   paintStats();
 }
 
@@ -406,233 +328,200 @@ function settle() { const t = target(mode, scen); cur.set(t); from.set(t); to.se
   curT = toT = fromT = (mode === 'geo' || mode === 'diff') ? 0 : 1; curReady = true; }
 
 /* ---------- 렌더 ---------- */
-/* Figma 214:3170의 지도 토큰. 임의 보간색을 만들지 않고 이 다섯 값만 조합한다. */
-const C = {
-  bg: '#ececec', green: '#076940', lime: '#cef00a',
-  orange: '#ff8324', orangeEdge: '#ff7105', ink: '#076940',
-  currentFill: 'rgba(206,240,10,.62)', currentEdge: 'rgba(7,105,64,.22)',
-  tramFill: 'rgba(255,131,36,.4)', quietGreen: 'rgba(7,105,64,.24)',
-};
-/* 지형 좌표만 지도 zoom을 따른다. 글자·선·점선·마커는 1/view.s로 역보정해
-   어떤 확대 단계에서도 사용자가 보는 화면 픽셀 크기를 동일하게 유지한다. */
-const P = (i) => [cur[i * 2], cur[i * 2 + 1]];
-const screenP = (i) => [cur[i * 2] * view.s + view.x, cur[i * 2 + 1] * view.s + view.y];
-const SZ = n => n / view.s;
-const mapFont = (weight, size) => `${weight} ${size / view.s}px Pretendard, sans-serif`;
-/* 역 마커는 지형과 완전히 같은 비율로 폭증시키지 않고, 줌에 따라 완만하게 반응한다.
-   화면상 0.78×~1.85× 범위라 확대감은 느껴지면서도 역이 지도를 덮지 않는다. */
-const markerScale = () => Math.max(.78, Math.min(1.85, Math.pow(view.s, .46)));
-const MK = n => n * markerScale() / view.s;
+/* 포스터 A1 최종본(Figma DDA_design 214:3169 "진짜Final") 팔레트 — css/style.css 의 :root 와 같은 값 */
+const C = { bg: '#f1f1f1', green: '#076940', green2: '#2e624c', lime: '#cef00a',
+            gold: '#e2c414', orange: '#ff7105', orangeDeep: '#8f3a00', ink: '#0b3a26' };
+const P = (i) => [cur[i * 2] * view.s + view.x, cur[i * 2 + 1] * view.s + view.y];
 
-/** 정보 텍스트는 외곽선이나 배경판 없이 단색으로만 그린다. */
-function mapText(text, x, y, color) {
-  ctx.fillStyle = color || C.ink; ctx.fillText(text, x, y);
-}
-
-/** 최종 그래픽용 곡선 정제. 촘촘한 GIS 꼭짓점을 직접 잇지 않고 중점 기반 곡선으로 재보간한다. */
-function traceSmoothRun(run, at) {
-  if (!run.length) return;
-  const points = run.map(at);
-  if (points.length === 1) { ctx.moveTo(points[0][0], points[0][1]); return; }
-  ctx.moveTo(points[0][0], points[0][1]);
-  for (let j = 1; j < points.length - 1; j++) {
-    const p = points[j], n = points[j + 1];
-    ctx.quadraticCurveTo(p[0], p[1], (p[0] + n[0]) / 2, (p[1] + n[1]) / 2);
-  }
-  const end = points[points.length - 1]; ctx.lineTo(end[0], end[1]);
-}
-function traceSmoothFeature(f, at) {
-  if (f.n < 3) return traceSmoothRun(Array.from({ length: f.n }, (_, j) => f.s + j), at);
-  const first = at(f.s), last = at(f.s + f.n - 1);
-  ctx.moveTo((first[0] + last[0]) / 2, (first[1] + last[1]) / 2);
-  for (let j = 0; j < f.n; j++) {
-    const p = at(f.s + j), n = at(f.s + (j + 1) % f.n);
-    ctx.quadraticCurveTo(p[0], p[1], (p[0] + n[0]) / 2, (p[1] + n[1]) / 2);
-  }
-  ctx.closePath();
-}
-function cityPath(src = null) {
+function poly(f) {
   ctx.beginPath();
-  for (const f of FEAT) if (f.key === 'city') {
-    traceSmoothFeature(f, i => src ? ghostAt(i, src) : P(i));
+  for (let j = 0; j < f.n; j++) { const [x, y] = P(f.s + j); j ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+  if (f.closed) ctx.closePath();
+}
+/** 중점 통과 2차 베지에 — 경계선의 미세한 각을 없앤다. */
+function smoothPath(f) {
+  const n = f.n; ctx.beginPath();
+  if (n < 3) { poly(f); return; }
+  let [qx, qy] = P(f.s + 1);
+  const [sx, sy] = P(f.s); ctx.moveTo(sx, sy);
+  for (let j = 1; j < n - 1; j++) {
+    const [nx, ny] = P(f.s + j + 1);
+    ctx.quadraticCurveTo(qx, qy, (qx + nx) / 2, (qy + ny) / 2);
+    qx = nx; qy = ny;
   }
+  ctx.lineTo(qx, qy);
+  if (f.closed) ctx.closePath();
 }
 
-/** 중심형 Catmull-Rom을 제한된 cubic SVG 패스로 변환한다.
- *  균일 스플라인의 급커브 오버슈트와 고리 현상을 막아 인쇄용 노선처럼 안정적으로 잇는다. */
-function routePathD(r) {
-  const pts = r.idx.map(i => P(NODE_S + i)), m = pts.length; if (m < 2) return;
-  const pt = i => pts[r.closed ? (i + m) % m : Math.max(0, Math.min(m - 1, i))];
-  const [x0, y0] = pt(0); let d = `M${x0.toFixed(2)} ${y0.toFixed(2)}`;
+/** Catmull-Rom 스플라인으로 정거장을 잇는다(장력 0.5). 어떤 왜곡에서도 꺾이지 않는다. */
+function routePath(r) {
+  const idx = r.idx, m = idx.length; if (m < 2) return;
+  const pt = i => {
+    const k = r.closed ? (i + m) % m : Math.max(0, Math.min(m - 1, i));
+    return P(NODE_S + idx[k]);
+  };
+  ctx.beginPath();
+  const [x0, y0] = pt(0); ctx.moveTo(x0, y0);
   const last = r.closed ? m : m - 1;
   for (let i = 0; i < last; i++) {
     const [p0x, p0y] = pt(i - 1), [p1x, p1y] = pt(i), [p2x, p2y] = pt(i + 1), [p3x, p3y] = pt(i + 2);
-    const d01 = Math.sqrt(Math.max(.001, Math.hypot(p1x - p0x, p1y - p0y)));
-    const d12 = Math.sqrt(Math.max(.001, Math.hypot(p2x - p1x, p2y - p1y)));
-    const d23 = Math.sqrt(Math.max(.001, Math.hypot(p3x - p2x, p3y - p2y)));
-    const seg = Math.max(.001, Math.hypot(p2x - p1x, p2y - p1y));
-    let t1x = (p2x - p0x) * d12 / Math.max(.001, d01 + d12) / 3;
-    let t1y = (p2y - p0y) * d12 / Math.max(.001, d01 + d12) / 3;
-    let t2x = (p3x - p1x) * d12 / Math.max(.001, d12 + d23) / 3;
-    let t2y = (p3y - p1y) * d12 / Math.max(.001, d12 + d23) / 3;
-    const cap = seg * .38;
-    const l1 = Math.hypot(t1x, t1y), l2 = Math.hypot(t2x, t2y);
-    if (l1 > cap) { t1x *= cap / l1; t1y *= cap / l1; }
-    if (l2 > cap) { t2x *= cap / l2; t2y *= cap / l2; }
-    d += `C${(p1x + t1x).toFixed(2)} ${(p1y + t1y).toFixed(2)} ${(p2x - t2x).toFixed(2)} ${(p2y - t2y).toFixed(2)} ${p2x.toFixed(2)} ${p2y.toFixed(2)}`;
+    ctx.bezierCurveTo(
+      p1x + (p2x - p0x) / 6, p1y + (p2y - p0y) / 6,
+      p2x - (p3x - p1x) / 6, p2y - (p3y - p1y) / 6,
+      p2x, p2y);
   }
-  return r.closed ? d + 'Z' : d;
+  if (r.closed) ctx.closePath();
 }
-/** 반대 시나리오의 한 조각. beginPath 는 호출자가 한다(여러 조각을 모아 evenodd 로 채우려고). */
-function ghostSub(f, src) {
-  traceSmoothFeature(f, i => ghostAt(i, src));
+function ghostPoly(f, src) {
+  ctx.beginPath();
+  for (let j = 0; j < f.n; j++) {
+    const i = f.s + j;
+    const gx = src[i * 2] * curT + posGeo[i * 2] * (1 - curT);
+    const gy = src[i * 2 + 1] * curT + posGeo[i * 2 + 1] * (1 - curT);
+    const x = gx * view.s + view.x, y = gy * view.s + view.y;
+    j ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  if (f.closed) ctx.closePath();
 }
-const ghostAt = (i, src) => [
-  src[i * 2] * curT + posGeo[i * 2] * (1 - curT),
-  src[i * 2 + 1] * curT + posGeo[i * 2 + 1] * (1 - curT)];
 
-/* ---------- 출력용 SVG 지도 ----------
- *  5개 구를 각각 독립 path로 유지하고, 공유 경계는 하나의 path에서 딱 한 번만 그린다.
- *  노선·정거장·출발지 역시 같은 SVG 좌표계에서 움직여 캔버스 선의 떨림과 이중선을 없앤다. */
-const districtRuns = GU_FEAT.map(f => Array.from({ length: f.n }, (_, j) => f.s + j));
-const districtSvg = [], districtCurrentSvg = [], routeSvg = [], stationSvg = [], ringSvg = [];
-function closedPathD(run, at) {
-  if (run.length < 3) return '';
-  const pts = run.map(at), first = pts[0], last = pts[pts.length - 1];
-  let d = `M${((first[0] + last[0]) / 2).toFixed(2)} ${((first[1] + last[1]) / 2).toFixed(2)}`;
-  for (let i = 0; i < pts.length; i++) {
-    const p = pts[i], n = pts[(i + 1) % pts.length];
-    d += `Q${p[0].toFixed(2)} ${p[1].toFixed(2)} ${((p[0] + n[0]) / 2).toFixed(2)} ${((p[1] + n[1]) / 2).toFixed(2)}`;
-  }
-  return d + 'Z';
-}
-function boundaryPathD() {
-  let d = '';
-  for (const run of GU_DRAW) {
-    const pts = run.map(P); if (pts.length < 2) continue;
-    d += `M${pts[0][0].toFixed(2)} ${pts[0][1].toFixed(2)}`;
-    for (let i = 1; i < pts.length - 1; i++) {
-      const p = pts[i], n = pts[i + 1];
-      d += `Q${p[0].toFixed(2)} ${p[1].toFixed(2)} ${((p[0] + n[0]) / 2).toFixed(2)} ${((p[1] + n[1]) / 2).toFixed(2)}`;
-    }
-    const end = pts[pts.length - 1]; d += `L${end[0].toFixed(2)} ${end[1].toFixed(2)}`;
-  }
-  return d;
-}
-function initSvgMap() {
-  for (let i = 0; i < districtRuns.length; i++) {
-    const name = D.guLabels[i]?.name || `구역 ${i + 1}`;
-    const under = document.createElementNS(SVG_NS, 'path');
-    const active = document.createElementNS(SVG_NS, 'path');
-    under.dataset.district = name; active.dataset.district = name;
-    districtCurrent.appendChild(under); districtActive.appendChild(active);
-    districtCurrentSvg.push(under); districtSvg.push(active);
-  }
-  for (const r of ROUTES) {
-    const path = document.createElementNS(SVG_NS, 'path');
-    path.dataset.route = r.kind; routeLines.appendChild(path); routeSvg.push(path);
-  }
-  for (const minutes of RINGS) {
-    const circle = document.createElementNS(SVG_NS, 'circle');
-    const label = document.createElementNS(SVG_NS, 'text');
-    circle.dataset.minutes = String(minutes); label.textContent = minutes + '분';
-    circle.setAttribute('fill', 'none'); circle.setAttribute('stroke', C.green);
-    circle.setAttribute('stroke-width', '.7'); circle.setAttribute('stroke-dasharray', '9 12');
-    circle.setAttribute('vector-effect', 'non-scaling-stroke');
-    label.setAttribute('fill', C.green); label.setAttribute('font-family', 'Pretendard, sans-serif');
-    label.setAttribute('font-weight', '600');
-    timeRings.appendChild(circle); timeRings.appendChild(label); ringSvg.push({ minutes, circle, label });
-  }
-  for (const s of ALL) {
-    const circle = document.createElementNS(SVG_NS, 'circle');
-    circle.dataset.station = s.name; stationMarks.appendChild(circle); stationSvg.push(circle);
+const isTramOnly = s => s.line === '트램';
+
+/** 시 영역 경로. 채우기·클립 양쪽에서 같은 경로를 써야 선이 면 밖으로 안 나간다. */
+function cityPath() {
+  ctx.beginPath();
+  for (const f of FEAT) if (f.key === 'city') {
+    for (let j = 0; j < f.n; j++) { const [x, y] = P(f.s + j); j ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+    ctx.closePath();
   }
 }
-function updateSvgMap() {
-  mapTransform.setAttribute('transform', `translate(${view.x.toFixed(2)} ${view.y.toFixed(2)}) scale(${view.s.toFixed(5)})`);
-  const band = curT > .05 && scen === 'tram' && mode !== 'diff';
-  const overlay = scen === 'tram' && curT > .05 && mode !== 'diff';
-  districtCurrent.style.display = band ? '' : 'none';
-  districtCurrent.style.opacity = String(curT);
-  districtActive.style.opacity = String(curT > .05 ? (band ? 1 : .92) : 1);
-  cityActiveFill.setAttribute('d', closedPathD(CITY_IDX, P));
-  cityActiveFill.setAttribute('fill', mode === 'diff' ? 'none' : overlay ? C.tramFill : C.currentFill);
-  cityCurrentFill.setAttribute('d', closedPathD(CITY_IDX, k => ghostAt(k, posNow)));
-  cityCurrentFill.setAttribute('fill', C.currentFill);
-  for (let i = 0; i < districtRuns.length; i++) {
-    districtSvg[i].setAttribute('d', closedPathD(districtRuns[i], P));
-    districtSvg[i].setAttribute('fill', mode === 'diff' ? 'none' : overlay ? C.tramFill : C.currentFill);
-    districtCurrentSvg[i].setAttribute('d', closedPathD(districtRuns[i], k => ghostAt(k, posNow)));
-    districtCurrentSvg[i].setAttribute('fill', C.currentFill);
-  }
-  districtBoundary.setAttribute('d', boundaryPathD());
-  timeRings.style.display = curT > .02 && mode !== 'diff' ? '' : 'none';
-  timeRings.setAttribute('opacity', String(curT));
-  for (const item of ringSvg) {
-    const rr = radial(item.minutes);
-    item.circle.setAttribute('cx', String(BOX.cx)); item.circle.setAttribute('cy', String(BOX.cy));
-    item.circle.setAttribute('r', String(rr)); item.circle.setAttribute('opacity', '.18');
-    item.label.setAttribute('x', String(BOX.cx + SZ(6)));
-    item.label.setAttribute('y', String(BOX.cy - rr + SZ(3)));
-    item.label.setAttribute('font-size', String(SZ(10.5))); item.label.setAttribute('opacity', '.46');
-  }
-  for (let i = 0; i < ROUTES.length; i++) {
-    const r = ROUTES[i], el = routeSvg[i]; el.setAttribute('d', routePathD(r) || '');
-    const tram = r.kind === 'tram';
-    el.setAttribute('stroke', C.green);
-    el.setAttribute('stroke-width', tram ? '5.2' : '2.2');
-    el.setAttribute('opacity', tram ? ((scen === 'tram' || mode === 'diff') ? '1' : '.16') : '.28');
-  }
-  for (let i = 0; i < ALL.length; i++) {
-    const s = ALL[i], el = stationSvg[i], isTram = s.line === '트램';
-    const hidden = (isTram && scen === 'now' && mode !== 'diff') || s.id === origin.id;
-    el.style.display = hidden ? 'none' : '';
-    if (hidden) continue;
-    const p = P(NODE_S + i), isH = hover === i;
-    el.setAttribute('cx', p[0].toFixed(2)); el.setAttribute('cy', p[1].toFixed(2));
-    el.setAttribute('r', String(MK(isH ? 4.4 : VW >= 821 ? 2.8 : 3.6)));
-    el.setAttribute('fill', isH ? C.orange : C.bg);
-    el.setAttribute('stroke', C.green); el.setAttribute('stroke-width', isH ? '1.8' : '1.25');
-  }
-  const op = P(NODE_S + ALL.indexOf(origin)), pw = MK(26), ph = pw * 167.661 / 123.484;
-  originPinMark.setAttribute('x', String(op[0] - pw / 2)); originPinMark.setAttribute('y', String(op[1] - ph));
-  originPinMark.setAttribute('width', String(pw)); originPinMark.setAttribute('height', String(ph));
-}
-initSvgMap();
 
 function draw() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, VW, VH);
-  ctx.setTransform(DPR * view.s, 0, 0, DPR * view.s, DPR * view.x, DPR * view.y);
   if (mode === 'diff' && tw > .55) { drawDiff(); return; }
 
+  // 대비 고스트(반대 시나리오)
+  if (curT > 0.05) {
+    const other = scen === 'tram' ? posNow : posTram;
+    ctx.save(); ctx.globalAlpha = curT * .95;
+    ctx.strokeStyle = scen === 'tram' ? 'rgba(7,105,64,.55)' : 'rgba(255,113,5,.85)';
+    ctx.lineWidth = 2; ctx.setLineDash([6, 5]);
+    for (const f of FEAT) if (f.key === 'city') { ghostPoly(f, other); ctx.stroke(); }
+    ctx.setLineDash([]); ctx.restore();
+  }
+
+  // 시 영역
+  ctx.fillStyle = scen === 'tram' ? C.orange : C.lime;
+  ctx.globalAlpha = curT > .05 ? .92 : 1;
+  cityPath();
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = scen === 'tram' ? 'rgba(7,105,64,.55)' : 'rgba(7,105,64,.45)';
+  ctx.lineWidth = 1.6; ctx.stroke();
+
+  // 구 경계 — 시 외곽선과 같은 색. 시 영역으로 클립한다.
+  // 시 외곽선은 정점 548개(≈365m 간격)를 직선으로 이어 볼록한 구간이 안쪽으로 잘리는데,
+  // 167m 간격인 구 경계 컨투어는 그 현(弦) 바깥으로 삐져나온다(워프 후 최대 7.6px).
+  ctx.save();
+  cityPath(); ctx.clip();
+  ctx.strokeStyle = scen === 'tram' ? 'rgba(7,105,64,.55)' : 'rgba(7,105,64,.45)';
+  ctx.lineWidth = 2.8;
+  for (const f of FEAT) if (f.key === 'guc') { smoothPath(f); ctx.stroke(); }
+  ctx.restore();
+
+  // 노선
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.strokeStyle = C.green; ctx.lineWidth = 5.4;
+  for (const r of D.routes) if (r.kind === 'm1') { routePath(r); ctx.stroke(); }
+  ctx.strokeStyle = scen === 'tram' ? C.orangeDeep : 'rgba(7,105,64,.3)';
+  ctx.lineWidth = 5.4;
+  for (const r of D.routes) if (r.kind === 'tram') { routePath(r); ctx.stroke(); }
+
+  // 구 이름
+  ctx.fillStyle = 'rgba(11,58,38,.62)'; ctx.font = '700 15px Pretendard, sans-serif'; ctx.textAlign = 'center';
+  for (let i = 0; i < D.guLabels.length; i++) { const [x, y] = P(GU_S + i); ctx.fillText(D.guLabels[i].name, x, y); }
+
+  // 정거장
+  for (let i = 0; i < ALL.length; i++) {
+    const s = ALL[i], [x, y] = P(NODE_S + i);
+    if (isTramOnly(s) && scen === 'now') continue;
+    const isO = i === origin, isH = hover === i;
+    const rr = VW >= 821 ? 3.6 : 4.4;
+    ctx.beginPath(); ctx.arc(x, y, isO ? rr + 4.5 : isH ? rr + 2.5 : rr, 0, 7);
+    ctx.fillStyle = isO ? C.orange : '#fff';
+    ctx.fill();
+    ctx.lineWidth = isO ? 3 : 1.6;
+    ctx.strokeStyle = isO ? C.green : (isTramOnly(s) ? C.orangeDeep : C.green);
+    ctx.stroke();
+  }
+
+  // 시간 링 (채움 위)
+  if (curT > 0.02 && mode !== 'diff') {
+    ctx.save(); ctx.globalAlpha = curT * .8;
+    const ccx = BOX.cx * view.s + view.x, ccy = BOX.cy * view.s + view.y;
+    ctx.strokeStyle = 'rgba(11,58,38,.42)'; ctx.setLineDash([4, 6]); ctx.lineWidth = 1.1;
+    for (const m of RINGS) { const r = radial(m) * view.s;
+      ctx.beginPath(); ctx.arc(ccx, ccy, r, 0, 7); ctx.stroke(); }
+    ctx.setLineDash([]);
+    ctx.font = '700 11.5px Pretendard, sans-serif'; ctx.textAlign = 'center';
+    for (const m of RINGS) {
+      const y = ccy - radial(m) * view.s;
+      ctx.fillStyle = 'rgba(241,241,241,.86)';
+      ctx.fillRect(ccx - 21, y - 13, 42, 15);
+      ctx.fillStyle = 'rgba(11,58,38,.75)'; ctx.fillText(m + '분', ccx, y - 2);
+    }
+    ctx.restore();
+  }
+
+  // 출발지 라벨
+  const [ox, oy] = P(NODE_S + origin);
+  ctx.font = '800 14px Pretendard, sans-serif'; ctx.textAlign = 'left';
+  ctx.fillStyle = C.green; ctx.fillText(ALL[origin].name, ox + 13, oy - 8);
 }
 
 function drawDiff() {
   cityPath();
-  ctx.fillStyle = C.currentFill; ctx.fill('evenodd');
-  const cell = Math.max(3, Math.sqrt(D.cellKm2) * GEO_SC + 0.6);   // 격자 간격에 맞춘 셀
+  ctx.fillStyle = '#e2e5db'; ctx.fill();
+  ctx.strokeStyle = 'rgba(7,105,64,.35)'; ctx.lineWidth = 1.4; ctx.stroke();
+
+  const cell = Math.max(3, 5.2 * view.s);
   for (let i = 0; i < GN; i++) {
     const v = gridCut[i]; if (v < 0.6) continue;
     const t = Math.min(1, v / 30);
     ctx.globalAlpha = 0.25 + t * 0.75;
-    ctx.fillStyle = t < .34 ? C.lime : t < .67 ? C.orange : C.orangeEdge;
-    const x = gridXY[i * 2], y = gridXY[i * 2 + 1];
+    ctx.fillStyle = t < .34 ? C.lime : t < .67 ? C.gold : C.orange;
+    const x = gridXY[i * 2] * view.s + view.x, y = gridXY[i * 2 + 1] * view.s + view.y;
     ctx.fillRect(x - cell / 2, y - cell / 2, cell, cell);
   }
   ctx.globalAlpha = 1;
 
+  ctx.save();
+  cityPath(); ctx.clip();
+  ctx.strokeStyle = 'rgba(7,105,64,.35)'; ctx.lineWidth = 2.4;
+  for (const f of FEAT) if (f.key === 'guc') { poly(f); ctx.stroke(); }
+  ctx.restore();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.strokeStyle = 'rgba(7,105,64,.4)'; ctx.lineWidth = 4.2;
+  for (const r of D.routes) if (r.kind === 'm1') { routePath(r); ctx.stroke(); }
+  ctx.strokeStyle = C.green2; ctx.lineWidth = 5.1;
+  for (const r of D.routes) if (r.kind === 'tram') { routePath(r); ctx.stroke(); }
+
+  for (let i = 0; i < ALL.length; i++) {
+    if (!isTramOnly(ALL[i])) continue;
+    const [x, y] = P(NODE_S + i);
+    ctx.beginPath(); ctx.arc(x, y, 3.2, 0, 7);
+    ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = C.green2; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+  const [ox, oy] = P(NODE_S + origin);
+  ctx.beginPath(); ctx.arc(ox, oy, 8, 0, 7); ctx.fillStyle = C.orange; ctx.fill();
+  ctx.strokeStyle = C.green; ctx.lineWidth = 3; ctx.stroke();
+  ctx.font = '800 14px Pretendard, sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = C.green;
+  ctx.fillText(ALL[origin].name, ox + 13, oy - 8);
+  ctx.fillStyle = 'rgba(11,58,38,.62)'; ctx.font = '700 15px Pretendard, sans-serif'; ctx.textAlign = 'center';
+  for (let i = 0; i < D.guLabels.length; i++) { const [x, y] = P(GU_S + i); ctx.fillText(D.guLabels[i].name, x, y); }
 }
 
-function step(now) {
-  if (zoomAnim) {
-    const t = Math.min(1, (now - zoomAnim.started) / zoomAnim.duration);
-    const e = easeInOut(t);
-    view.s = zoomAnim.from.s + (zoomAnim.to.s - zoomAnim.from.s) * e;
-    view.x = zoomAnim.from.x + (zoomAnim.to.x - zoomAnim.from.x) * e;
-    view.y = zoomAnim.from.y + (zoomAnim.to.y - zoomAnim.from.y) * e;
-    if (t >= 1) { view = { ...zoomAnim.to }; zoomTarget = { ...view }; zoomAnim = null; }
-  }
+function step() {
   if (tw < 1) {
     tw = Math.min(1, tw + 16 / 1400);
     const e = easeInOut(tw);
@@ -641,17 +530,15 @@ function step(now) {
     curReady = true;
   }
   draw();
-  updateSvgMap();
   requestAnimationFrame(step);
 }
 
 /* ---------- 리사이즈 ---------- */
 function resize() {
-  clearTimeout(zoomTimer); zoomAnim = null;
   DPR = Math.min(devicePixelRatio || 1, 2);
   VW = cvs.clientWidth; VH = cvs.clientHeight;
   cvs.width = Math.round(VW * DPR); cvs.height = Math.round(VH * DPR);
-  layout(); fitGeo(); recompute(); settle(); zoomTarget = { ...view };
+  layout(); fitGeo(); recompute(); settle();
 }
 addEventListener('resize', resize);
 
@@ -659,94 +546,51 @@ addEventListener('resize', resize);
 const tip = document.getElementById('tip');
 let drag = null, moved = 0;
 const rel = e => { const r = cvs.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
-const ZOOM_IDLE_MS = 240;
-function cancelZoomMotion() {
-  clearTimeout(zoomTimer); zoomTimer = 0; zoomAnim = null; zoomTarget = { ...view };
-}
-function animateToZoomTarget() {
-  zoomTimer = 0;
-  const distance = Math.abs(Math.log(zoomTarget.s / view.s));
-  if (distance < .001) return;
-  zoomAnim = {
-    from: { ...view }, to: { ...zoomTarget }, started: performance.now(),
-    duration: Math.max(440, Math.min(720, 430 + distance * 170)),
-  };
-}
-/** hit 기본값은 '탭으로 출발지 바꾸기'용. 호버 판정은 정거장 위에 실제로 올라갔을 때만. */
-function pick(px, py, hit) {
-  const HIT = hit ?? (VW >= 821 ? 16 : 22);
-  let best = -1, bd = HIT * HIT;
+function pick(px, py) {
+  const HIT = VW >= 821 ? 16 : 22; let best = -1, bd = HIT * HIT;
   for (let i = 0; i < ALL.length; i++) {
-    if (ALL[i].line === '트램' && scen === 'now') continue;
-    const [x, y] = screenP(NODE_S + i); const d = (x - px) ** 2 + (y - py) ** 2;
+    if (isTramOnly(ALL[i]) && scen === 'now') continue;
+    const [x, y] = P(NODE_S + i); const d = (x - px) ** 2 + (y - py) ** 2;
     if (d < bd) { bd = d; best = i; }
   }
   return best;
 }
-function clearHover() { hover = null; tip.hidden = true; }
-cvs.addEventListener('pointerdown', e => {
-  cancelZoomMotion();
-  cvs.setPointerCapture(e.pointerId); drag = rel(e); moved = 0; clearHover();
-});
+cvs.addEventListener('pointerdown', e => { cvs.setPointerCapture(e.pointerId); drag = rel(e); moved = 0; });
 cvs.addEventListener('pointermove', e => {
   const p = rel(e);
-  if (drag) {
-    view.x += p.x - drag.x; view.y += p.y - drag.y;
-    moved += Math.abs(p.x - drag.x) + Math.abs(p.y - drag.y); drag = p;
-    clearHover(); draw(); return;
-  }
-  // 정거장 정보는 마우스가 정거장 위에 올라가 있는 동안에만.
-  if (e.pointerType && e.pointerType !== 'mouse') { clearHover(); return; }
-  const h = pick(p.x, p.y, VW >= 821 ? 11 : 13);
+  if (drag) { view.x += p.x - drag.x; view.y += p.y - drag.y; moved += Math.abs(p.x - drag.x) + Math.abs(p.y - drag.y); drag = p; tip.hidden = true; return; }
+  const h = pick(p.x, p.y); hover = h < 0 ? null : h;
   cvs.style.cursor = h < 0 ? 'grab' : 'pointer';
-  if (h < 0) { clearHover(); return; }
-  hover = h;
-  const s = ALL[h];
-  const a = minsNow[NODE_S + h], b = minsTram[NODE_S + h];
-  const fm = v => v >= CAP ? CAP + '분+' : Math.round(v) + '분';
-  const d = a - b;
-  tip.innerHTML = `<b>${s.name}</b><span>${s.line}</span>
-    <span class="t">현재 <em>${fm(a)}</em> · 트램 후 <em class="o">${fm(b)}</em>${
-      d > 0.5 ? ` <em class="cut">−${Math.round(d)}분</em>` : ''}</span>`;
-  tip.hidden = false;
-  const tw2 = tip.offsetWidth / 2 + 8;
-  tip.style.left = Math.max(tw2, Math.min(innerWidth - tw2, e.clientX)) + 'px';
-  tip.style.top = Math.max(52, e.clientY) + 'px';
+  if (h >= 0) {
+    const s = ALL[h];
+    const a = minsNow[NODE_S + h], b = minsTram[NODE_S + h];
+    const fm = v => v >= CAP ? CAP + '분+' : Math.round(v) + '분';
+    tip.innerHTML = `<b>${s.name}</b><span>${s.line}</span>
+      <span class="t">현재 <em>${fm(a)}</em> · 트램 후 <em class="o">${fm(b)}</em></span>`;
+    tip.hidden = false;
+    const tw2 = tip.offsetWidth / 2 + 8;
+    tip.style.left = Math.max(tw2, Math.min(innerWidth - tw2, e.clientX)) + 'px';
+    tip.style.top = Math.max(52, e.clientY) + 'px';
+  } else tip.hidden = true;
 });
 function up(e) {
-  if (drag && moved < 5) { const h = pick(drag.x, drag.y); if (h >= 0) setOrigin(ALL[h]); }
+  if (drag && moved < 5) { const h = pick(drag.x, drag.y); if (h >= 0) setOrigin(h); }
   drag = null; cvs.style.cursor = 'grab';
 }
 cvs.addEventListener('pointerup', up); cvs.addEventListener('pointercancel', up);
-cvs.addEventListener('pointerleave', clearHover);
-addEventListener('blur', clearHover);
+cvs.addEventListener('pointerleave', () => { if (!drag) { tip.hidden = true; hover = null; } });
 cvs.addEventListener('wheel', e => {
-  clearHover();
-  e.preventDefault();
-  if (zoomAnim) cancelZoomMotion();
-  const p = rel(e);
-  const unit = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 18
-    : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? Math.max(320, VH) : 1;
-  const dy = Math.max(-140, Math.min(140, e.deltaY * unit));
-  const f = Math.exp(-dy * 0.0042);
-  const ns = Math.max(.5, Math.min(6, zoomTarget.s * f)); const k = ns / zoomTarget.s;
-  zoomTarget.x = p.x - (p.x - zoomTarget.x) * k;
-  zoomTarget.y = p.y - (p.y - zoomTarget.y) * k;
-  zoomTarget.s = ns;
-  clearTimeout(zoomTimer);
-  zoomTimer = setTimeout(animateToZoomTarget, ZOOM_IDLE_MS);
+  e.preventDefault(); const p = rel(e); const f = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+  const ns = Math.max(.5, Math.min(6, view.s * f)); const k = ns / view.s;
+  view.x = p.x - (p.x - view.x) * k; view.y = p.y - (p.y - view.y) * k; view.s = ns;
 }, { passive: false });
-cvs.addEventListener('dblclick', () => {
-  cancelZoomMotion();
-  zoomTarget = { s: 1, x: 0, y: 0 };
-  animateToZoomTarget();
-});
+cvs.addEventListener('dblclick', () => { view = { s: 1, x: 0, y: 0 }; });
 
-function setOrigin(s) {
-  origin = s; recompute();
-  document.getElementById('originName').textContent = s.name;
-  document.getElementById('originLine').textContent = s.line;
-  document.getElementById('originPick').value = String(s.id);   // 지도 클릭과 선택상자를 맞춘다
+function setOrigin(i) {
+  origin = i; recompute();
+  document.getElementById('originName').textContent = ALL[i].name;
+  document.getElementById('originLine').textContent = ALL[i].line;
+  document.getElementById('originPick').value = String(i);
   if (mode === 'time') tweenTo('time', scen); else settle();
 }
 
@@ -760,12 +604,6 @@ function paintStats() {
   document.getElementById('a30g').textContent = (gain >= 0 ? '+' : '') + gain.toFixed(0) + '%';
   document.getElementById('a45n').textContent = f(stats.a45n);
   document.getElementById('a45t').textContent = f(stats.a45t);
-  const sh = stats.shrink * 100;
-  document.getElementById('shrink').textContent = (sh >= 0 ? '−' : '+') + Math.abs(sh).toFixed(0) + '%';
-  document.getElementById('shrinkNote').textContent =
-    sh >= 20 ? '트램이 새로 닿는 곳이라 변화가 큽니다.'
-    : sh >= 8 ? '1호선과 트램이 함께 닿아 중간 정도 줄어듭니다.'
-    : '이미 1호선이 지나는 곳이라 변화가 작습니다. 다른 출발지를 골라 보세요.';
   document.getElementById('cutArea').textContent = f(stats.cutArea);
   document.getElementById('cutMax').textContent = stats.cutMax.toFixed(0);
   document.getElementById('odBody').innerHTML = stats.rows.map(r => {
@@ -784,24 +622,27 @@ document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click'
   document.body.dataset.scen = scen;
   document.body.dataset.view = mode;
   document.getElementById('ghostNote').textContent =
-    (mode === 'geo' ? '지리 지도 — 실제 거리 그대로' :
+    mode === 'geo' ? '지리 지도 — 실제 거리 그대로' :
     mode === 'diff' ? '트램으로 줄어드는 시간 — 진할수록 많이 줄어듭니다' :
-    scen === 'tram' ? '연한 연두 = 현재 · 주황 = 트램 후 · 진녹색 = 트램 노선'
-                    : '연한 연두 = 현재 시간지도 · 진녹색 = 도시철도');
+    scen === 'tram' ? '점선 = 현재 시간지도 · 면 = 트램 후' : '점선 = 트램 후 시간지도 · 면 = 현재';
   tweenTo(mode === 'diff' ? 'geo' : mode, scen);
   if (window.innerWidth < 821) document.body.dataset.sheet = '0';
 }));
 document.getElementById('originPick').addEventListener('change', e => {
-  const s = ALL.find(x => String(x.id) === e.target.value); if (s) setOrigin(s);
+  setOrigin(Number(e.target.value));
 });
 
 (function initPicker() {
   const sel = document.getElementById('originPick');
-  const g1 = document.createElement('optgroup'); g1.label = '도시철도 1호선';
-  for (const s of D.metro) g1.appendChild(new Option(s.name, s.id));
-  const g2 = document.createElement('optgroup'); g2.label = '트램 2호선 정거장';
-  for (const s of D.tram) g2.appendChild(new Option(s.name, s.id));
-  sel.append(g1, g2); sel.value = String(origin.id);
+  // 환승역은 두 노선 어디에도 중복해 넣지 않고 자기 그룹을 갖는다.
+  for (const [label, line] of [['도시철도 1호선', '1호선'],
+                               ['1호선 · 트램 환승', '1호선·트램'],
+                               ['트램 2호선 정거장', '트램']]) {
+    const g = document.createElement('optgroup'); g.label = label;
+    ALL.forEach((s, i) => { if (s.line === line) g.appendChild(new Option(s.name, i)); });
+    if (g.childElementCount) sel.appendChild(g);
+  }
+  sel.value = String(origin);
 })();
 
 const sheetBtn = document.getElementById('sheetBtn');
@@ -812,8 +653,9 @@ addEventListener('orientationchange', () => setTimeout(resize, 220));
 document.body.dataset.sheet = '0';
 
 resize();
-document.getElementById('originName').textContent = origin.name;
-document.getElementById('originLine').textContent = origin.line;
+document.getElementById('originName').textContent = ALL[origin].name;
+document.getElementById('originLine').textContent = ALL[origin].line;
 document.body.dataset.scen = scen;
-document.body.dataset.view = mode;
 requestAnimationFrame(step);
+document.body.dataset.view = 'geo';
+setTimeout(() => document.querySelector('[data-mode="tram"]').click(), 900);

@@ -3,32 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#fafafa">
+<meta name="theme-color" content="#f1f1f1">
 <title>대전, 생각보다 가깝네? — 시간 지도</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
-<body data-view="time">
+<body data-view="geo">
 <div id="app">
   <canvas id="stage"></canvas>
-  <svg id="mapSvg" aria-hidden="true">
-    <g id="mapTransform">
-      <g id="districtCurrent"><path id="cityCurrentFill"></path></g>
-      <g id="districtActive"><path id="cityActiveFill"></path></g>
-      <path id="districtBoundary"></path>
-      <g id="timeRings"></g>
-      <g id="routeLines"></g>
-      <g id="stationMarks"></g>
-      <image id="originPinMark" href="assets/figma/origin-pin.svg"></image>
-    </g>
-  </svg>
 
   <div id="railL">
     <header id="head">
-      <h1 aria-label="대전, 생각보다 가깝네?">
-        <span class="title-line title-first">대전,</span>
-        <span class="title-line title-second">생각보다</span>
-        <span class="title-line title-third">가깝네?</span>
-      </h1>
+      <h1>대전,<br>생각보다 <em>가깝네?</em></h1>
       <p>거리가 아니라 <strong>이동 시간</strong>으로 그린 대전입니다. 출발 정거장을 고르고
          현재와 트램 도입 후를 바꿔 보세요. 도시가 얼마나 줄어드는지 보입니다.</p>
     </header>
@@ -47,8 +32,8 @@
         <button data-mode="tram" class="on">시간 · 트램 후</button>
         <button data-mode="diff">단축 시간</button>
       </div>
-      <div id="ghostNote">연한 연두 = 현재 · 주황 = 트램 후 · 진녹색 = 트램 노선</div>
-      <div id="hint">정거장에 마우스를 올리면 소요시간 · 클릭하면 출발지 변경 · 스크롤 확대 · 드래그 이동 · 더블클릭 원위치</div>
+      <div id="ghostNote">점선 = 현재 시간지도 · 면 = 트램 후</div>
+      <div id="hint">정거장 클릭해 출발지 변경 · 스크롤 확대 · 드래그 이동 · 더블클릭 원위치</div>
     </div>
   </div>
 
@@ -58,24 +43,13 @@
     <button id="sheetClose" type="button" aria-label="닫기">×</button>
 
     <div class="card" id="reachCard">
-      <h3>트램 후, 같은 30분이 더 넓어집니다</h3>
+      <h3>30분 안에 닿는 대전</h3>
       <div class="kpi">
         <span class="v now" id="a30n">—</span><span class="arrow">→</span>
         <span class="v tram" id="a30t">—</span><span class="u">km²</span>
       </div>
       <span class="gain" id="a30g">—</span>
       <div class="foot-line">45분 기준 <b id="a45n">—</b> → <b class="o" id="a45t">—</b> km²</div>
-    </div>
-
-    <div class="card" id="shrinkCard">
-      <h3>도시 전체 시간지도 변화</h3>
-      <div class="kpi">
-        <span class="v tram" id="shrink">—</span><span class="u">시간지도 면적</span>
-      </div>
-      <div class="foot-line">
-        같은 축척으로 그린 현재와 트램 후의 면적 비교입니다.
-        <b id="shrinkNote">—</b>
-      </div>
     </div>
 
     <div class="card" id="cutCard">
@@ -85,7 +59,8 @@
         <span style="flex:1"></span>
         <span class="v tram" id="cutMax">—</span><span class="u">분 최대</span>
       </div>
-      <div class="foot-line">시간이 줄어드는 지역 면적과, 가장 크게 줄어드는 지점의 단축 폭</div>
+      <div class="foot-line">시간이 줄어드는 지역 면적과, 가장 크게 줄어드는 지점의 단축 폭.
+        대중교통이 닿지 않는 외곽도 도심에서 줄어든 시간을 그대로 물려받으므로 면적에 포함됩니다.</div>
     </div>
 
     <div class="card">
@@ -97,31 +72,31 @@
     </div>
 
     <div id="legend">
-      <div class="row"><span class="sw" style="background:rgba(206,240,10,.62)"></span> 현재 시간지도</div>
-      <div class="row"><span class="sw" style="background:rgba(255,131,36,.4)"></span> 트램 도입 후 시간지도</div>
-      <div class="row"><span class="line"></span> 트램 노선</div>
+      <div class="row"><span class="sw" style="background:#cef00a"></span> 현재 시간지도</div>
+      <div class="row"><span class="sw" style="background:#ff7105"></span> 트램 도입 후 시간지도</div>
+      <div class="row"><span class="dash"></span> 대비되는 시나리오의 외곽선</div>
       <div class="row" id="diffLegend"><span class="sw" style="background:#cef00a"></span>
-        <span class="sw" style="background:#ffb43a"></span>
-        <span class="sw" style="background:#ff6a00"></span> 단축 10 · 20 · 30분↑</div>
+        <span class="sw" style="background:#e2c414"></span>
+        <span class="sw" style="background:#ff7105"></span> 단축 10 · 20 · 30분↑</div>
       <div class="note">
-        원 = 출발지에서 30 · 60 · 90분. 방향은 실제 방위이고
-        <b>반지름은 소요시간에 정비례</b>합니다(150분 상한, 전 출발지 기준 시 경계 최대치가
-        135.6분이라 실제로는 걸리지 않습니다).
+        원 = 출발지에서 30 · 60 · 90 · 120 · 150분. 방향은 실제 방위, 반지름은 소요시간입니다.
+        가까운 곳이 뭉치지 않도록 반지름에 0.68제곱 스케일을 썼고, 200분을 넘으면 테두리에 고정됩니다.
         노선은 정거장을 순서대로 잇는 스플라인으로 그려 왜곡해도 꺾이지 않습니다(선형은 단순화됨).<br>
-        <b>축척</b> · 두 단계의 성격이 다릅니다.
-        <b>지리 → 현재</b>는 km에서 분으로 단위가 바뀌는 축척 변경이라, 현재 시간지도 면적을
-        지리 지도의 88%로 맞춰 약하게 두었습니다.
-        <b>현재 → 트램 후</b>는 분→픽셀 환산을 <b>현재 지도 하나로 고정</b>해 두 시간지도가
-        함께 쓰므로, 크기 차이가 전부 실제 시간 차이입니다. 반지름이 시간에 정비례하니
-        위 카드의 면적 숫자가 곧 화면에서 줄어든 넓이입니다.<br>
-        <b>모델</b> · 직선거리에 우회계수 1.3 · 도보 4.55km/h ·
-        시내버스 접근·대기 10분 + 표정속도 16km/h + 5km 초과 시 환승 7분 ·
-        철도 하차 후에는 도보 또는 연계버스(환승도보 2분 + 대기 3분 + 16km/h) 중 빠른 쪽 ·
-        1호선 표정속도 33.5km/h(20.5km, 대기 4분) ·
-        트램 표정속도 22.06km/h(본선 33.9km · 45개 정거장 · 대기 3.75분 = 첨두 배차 7분 30초의 절반) ·
-        환승 도보 2분 + 거리.<br>
-        트램·1호선 제원은 공표 수치이고, <b>버스·도보 계수는 비교를 위한 가정</b>입니다.
-        지오메트리는 OpenStreetMap(ODbL 1.0) 기반, 개통 시기는 2026년 6월 대전시 발표(2030년 하반기) 기준.
+        <b>소요시간</b> · 추정 공식이 아니라 실제 시간표로 계산했습니다.
+        TAGO 대중교통 노선정보 + 대전시버스운송사업조합 시간표(2026.08.01) + 도시철도 1호선 + 트램으로
+        GTFS 를 만들고 r5py(R5) 로 통행시간 행렬을 구했습니다.
+        2026-08-12(수) 10:00 출발, 60분 구간 중앙값, 도보 접근 최대 15분, 150분 상한.
+        도보·환승·대기가 모두 포함된 값입니다. 평시 기준이며 첨두시간대가 아닙니다.<br>
+        <b>대중교통이 닿지 않는 곳</b> · 위 조건으로 못 닿는 지점은
+        <b>가장 가까운 도달 지점까지의 시간 + 거기서부터 걸어가는 시간</b>으로 계산했습니다
+        (도보 3.6km/h, 직선거리에 우회계수 1.3). 이 도보 구간은 트램이 바꾸지 않으므로
+        두 시나리오에 똑같이 더해지고, 도심에서 줄어든 시간이 외곽까지 그대로 전달됩니다.
+        면적 수치에도 이 방식이 함께 반영돼 있습니다.<br>
+        <b>남은 가정</b> · 트램 표정속도 22.06km/h 는 2026년 8월 현재 미공표라 모델 선택입니다
+        (배차 7분 30초·본선 33.9km·정거장 45개는 대전시 계획값).
+        1호선 판암~반석 38분도 대전교통공사 시간표 대조 전 값입니다.<br>
+        경계는 OpenStreetMap 행정경계(ODbL 1.0), 정거장 좌표·이름은 공식 자료.
+        개통 시기는 2026년 6월 대전시 발표(2030년 하반기) 기준.
       </div>
     </div>
   </aside>
