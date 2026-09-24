@@ -1,7 +1,16 @@
-# 대전 시간지도 — 웹 비주얼라이제이션
+# 대전 시간지도 - Daejeon Timemap
 
 거리가 아니라 **이동 시간**으로 그린 대전. 출발 정거장을 고르면 현재와 트램 도입 후의
 도달 범위가 어떻게 달라지는지 보여줍니다.
+
+**A map of Daejeon drawn by travel time, not distance.** Pick an origin stop and compare
+reachable areas before and after the planned tram line - computed from real schedules
+(GTFS + R5), not estimates. 65 origins × 2,207 destinations, rendered as an interactive
+canvas visualization with a geographic↔time morph.
+
+<!-- TODO(여남규): 네 가지 뷰 스크린샷 + 모프 전환 GIF 추가
+<img src="assets/timemap-morph.gif" alt="지리 지도에서 시간지도로의 전환" width="80%">
+-->
 
 ## 실행
 
