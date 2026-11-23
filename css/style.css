@@ -78,7 +78,7 @@ html,body{margin:0;height:100%;height:100dvh;overflow:hidden;background:var(--bg
 #hintM{display:none;font-size:11.5px;color:var(--green-50);opacity:.85}
 
 /* ============ 우측 레일 ============ */
-#railR{position:absolute;right:var(--pad);top:var(--pad);bottom:var(--pad);
+#railR{position:fixed;right:var(--pad);top:var(--pad);bottom:var(--pad);
   width:calc(var(--rail-r) - var(--pad) - 24px);display:flex;flex-direction:column;gap:16px;
   overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;z-index:3;padding-right:2px}
 #railR::-webkit-scrollbar{width:5px}
@@ -121,7 +121,7 @@ body[data-view="diff"] #reachCard{opacity:.5}
    호버를 벗어나도 사라지지 않았다. 명시적으로 되돌린다. */
 #tip[hidden]{display:none}
 
-#sheetCue,#scrim,#sheetGrab{display:none}
+#scrim,#sheetGrab{display:none}
 
 /* ============ 태블릿 ============ */
 @media (max-width:1240px){
@@ -131,8 +131,23 @@ body[data-view="diff"] #reachCard{opacity:.5}
 
 /* ============ 모바일 ============ */
 @media (max-width:820px){
-  :root{--pad:16px}
-  #railL{left:0;right:0;top:0;bottom:0;width:auto;padding:16px 16px 0;gap:12px}
+  /* 여기서는 '시트를 연다'가 아니라 **페이지가 진짜로 스크롤된다**.
+     앞서는 html·body 를 overflow:hidden + position:fixed 로 묶어 놓고 손가락을
+     직접 받아 시트를 흉내 냈는데, 사파리에서는 그 제스처를 시스템이 먼저 채 가는
+     경우가 있어 "올라가지도 않는" 상태가 된다. 지도만 화면에 고정해 두고
+     숫자 판을 문서 흐름에 놓으면, 올리고 내리는 건 전부 브라우저가 한다 —
+     관성·고무줄·주소창 접힘까지 iOS 가 아는 방식 그대로. */
+  html,body{overflow:visible;height:auto;min-height:100%;overscroll-behavior-y:none}
+  /* 고정 셸은 svh(바가 보이는 가장 작은 뷰포트)로 잡는다. dvh 로 두면 스크롤 중
+     주소창이 접힐 때마다 높이가 변해 지도를 다시 계산하느라 화면이 튄다. */
+  #app{position:fixed;left:0;top:0;width:100%;height:100vh;height:100svh}
+  /* 한 손가락은 페이지를 넘긴다(지도는 끌지 않는다). 두 손가락 확대는 app.js 몫. */
+  #stage{touch-action:pan-y}
+  :root{--pad:16px;--shell:100vh;--shell:100svh;--peek:46px}
+  /* 숫자가 올라오는 만큼 지도 화면의 글자는 물러난다. 반투명 판 뒤로 제목이
+     비쳐 들어와 숫자와 겹쳐 읽히는 걸 막는다. */
+  #railL{left:0;right:0;top:0;bottom:0;width:auto;padding:16px 16px 0;gap:12px;
+    opacity:calc(1 - var(--sheet-p,0) * 1.25)}
   /* 제목은 두 줄로 접지 않고 한 줄로 폭을 꽉 채운다. 글자 수가 고정이라 크기만
      맞추면 되고, 크기는 app.js 의 fitTitle() 이 재서 넣는다(글꼴 로드·회전 후 다시). */
   #head h1{font-size:34px;margin:0 0 12px;line-height:1.04;letter-spacing:-.02em;
@@ -142,10 +157,10 @@ body[data-view="diff"] #reachCard{opacity:.5}
   #origin{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
   #origin .lab{display:none} #origin .big{font-size:22px} #origin .sub{margin:0;font-size:12px}
   #originPick{margin-top:0;width:auto;max-width:none;flex:1;min-width:130px;padding:7px 28px 7px 10px;font-size:12.5px}
-  /* position:fixed 는 사파리에서 주소창 뒤로 들어간다. 꽉 찬 #railL 의 맨 아래 칸으로
-     흘려 두면 dvh 로 잡힌 #app 바닥 = 실제로 보이는 화면 바닥에 붙는다. */
+  /* 아래 비쳐 두는 숫자 판(--peek)만큼은 비워 둔다. 안 그러면 안내 두 줄이
+     반투명 판 뒤에 깔려 읽히지 않는다. */
   #ctl{position:static;margin:auto -16px 0;
-    padding:12px 16px calc(12px + var(--safe-b));gap:8px;
+    padding:12px 16px calc(14px + var(--peek) + var(--safe-b));gap:8px;
     background:linear-gradient(to top,var(--bg) 62%,rgba(241,241,241,0));z-index:4}
   .seg{overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;max-width:100%}
   .seg::-webkit-scrollbar{display:none}
@@ -154,57 +169,37 @@ body[data-view="diff"] #reachCard{opacity:.5}
   #hintM{display:block}
   #ghostNote{font-size:12px}
 
-  /* 통계 = 위로 밀어 올리는 반투명 시트. 불투명하게 덮으면 지도가 사라져 방금
-     고른 출발지와 숫자가 끊긴다. 뒤가 비쳐야 '같은 지도의 숫자'로 읽힌다. */
-  #railR{left:0;right:0;top:auto;bottom:0;width:auto;max-height:74vh;max-height:74dvh;
-    touch-action:pan-y;
-    background:rgba(241,241,241,.72);border-top:1.5px solid rgba(7,105,64,.22);
+  /* 숫자 판 = 첫 화면 아래에 이어 붙은 문서. 지도 한 화면만큼 내려 두고 아랫단만
+     살짝 비쳐 두면, 그 자체가 '아래에 더 있다'는 표시가 된다.
+     반투명은 흐림(backdrop-filter) 없이 알파로만 — 움직이는 면 뒤를 매 프레임 다시
+     흐리게 만드는 건 폰에서 가장 비싼 연산이라, 스크롤이 그만큼 밀린다. */
+  #railR{position:relative;left:auto;right:auto;top:auto;bottom:auto;width:auto;
+    transform:none;max-height:none;overflow:visible;z-index:6;
+    margin:calc(var(--shell) - var(--peek)) 0 0;min-height:var(--shell);
+    background:rgba(241,241,241,.84);border-top:1.5px solid rgba(7,105,64,.22);
     border-radius:18px 18px 0 0;
-    -webkit-backdrop-filter:blur(18px) saturate(1.25);backdrop-filter:blur(18px) saturate(1.25);
-    padding:8px 16px calc(20px + var(--safe-b));gap:12px;
-    transform:translateY(101%);transition:transform .38s cubic-bezier(.22,1,.3,1);z-index:6;
+    padding:8px 16px calc(28px + var(--safe-b));gap:12px;
     box-shadow:0 -18px 40px rgba(7,105,64,.16)}
-  body[data-sheet="1"] #railR{transform:none}
-  /* 손가락을 따라오는 동안에는 app.js 가 transform 을 직접 넣으므로 전환을 끈다 */
-  body[data-sheet-drag="1"] #railR{transition:none}
-  /* 시트가 올라온 만큼 지도를 눌러 둔다(--sheet-p 는 app.js 가 끌리는 동안 채운다) */
+  /* 지도를 스크롤한 만큼 눌러 둔다(--sheet-p 는 app.js 가 스크롤에 맞춰 채운다) */
   #scrim{display:block;position:absolute;inset:0;z-index:5;pointer-events:none;
-    background:rgba(7,105,64,.16);opacity:var(--sheet-p,0);transition:opacity .38s ease}
-  body[data-sheet="1"]{--sheet-p:1}
-  body[data-sheet-drag="1"] #scrim{transition:none}
-  /* 손잡이는 ::before 가 아니라 진짜 요소다 — 여기서 손가락을 받아 시트를 내린다.
-     시트 본문은 세로 스크롤을 쓰므로(touch-action:pan-y) 손잡이만 none 으로 떼어 둔다. */
-  #sheetGrab{display:flex;justify-content:center;align-items:center;height:22px;flex:none;
-    touch-action:none;cursor:grab;margin:-2px -16px 2px;position:relative;z-index:1}
-  #sheetGrab span{display:block;width:38px;height:4px;border-radius:2px;background:var(--green-18)}
-  /* 끌리는 동안에는 블러를 끈다. 움직이는 면 뒤를 매 프레임 다시 흐리게 만드는 건
-     모바일에서 가장 비싼 연산이라, 켜 두면 시트가 손가락을 못 따라온다. */
-  body[data-sheet-drag="1"] #railR{backdrop-filter:none;-webkit-backdrop-filter:none;
-    background:rgba(241,241,241,.88)}
-  body[data-sheet="1"] #scrim{pointer-events:auto}
-  .card{padding:14px 15px}
-  /* 올라올 것이 있다는 신호는 글자 없이 움직임으로만 준다. 카드로 띄우면 지도 위에
-     또 하나의 판이 생기고, 정작 '미는' 동작은 알려 주지 못한다. */
-  #sheetCue{display:flex;position:absolute;left:50%;bottom:calc(100px + var(--safe-b));z-index:5;
-    flex-direction:column;align-items:center;gap:6px;margin-left:-28px;width:56px;
-    appearance:none;border:0;background:transparent;padding:6px 0;cursor:pointer;
-    -webkit-tap-highlight-color:transparent;touch-action:none;
-    animation:cueBob 3.1s cubic-bezier(.4,0,.3,1) infinite}
-  #sheetCue .chev{width:13px;height:13px;border-left:2.2px solid var(--green);
-    border-top:2.2px solid var(--green);transform:rotate(45deg);border-radius:1px}
-  #sheetCue .bar{width:30px;height:3.5px;border-radius:2px;background:var(--green-18)}
-  @keyframes cueBob{
-    0%{transform:translateY(7px);opacity:.2}
-    30%{transform:translateY(-1px);opacity:.92}
-    62%{transform:translateY(-6px);opacity:.42}
-    100%{transform:translateY(7px);opacity:.2}
+    background:rgba(7,105,64,.16);opacity:var(--sheet-p,0)}
+  /* 유도는 따로 띄운 버튼이 아니라, 비쳐 보이는 판의 손잡이 자체가 한다. 숨 쉬듯
+     아주 조금 오르내리는 것만으로 '여기를 끌어 올려라'가 읽힌다. 한 번 내려가 본
+     뒤에는 멈춘다. 톡 치면 부드럽게 데려다 준다. */
+  #sheetGrab{display:flex;justify-content:center;align-items:center;height:26px;flex:none;
+    margin:-2px -16px 2px;appearance:none;border:0;background:transparent;width:calc(100% + 32px);
+    cursor:pointer;-webkit-tap-highlight-color:transparent}
+  #sheetGrab span{display:block;width:38px;height:4px;border-radius:2px;background:var(--green-18);
+    animation:grabBreathe 2.8s cubic-bezier(.4,0,.3,1) infinite}
+  @keyframes grabBreathe{
+    0%{transform:translateY(3px) scaleX(.86);opacity:.5}
+    38%{transform:translateY(-3px) scaleX(1);opacity:1}
+    72%{transform:translateY(1px) scaleX(.93);opacity:.72}
+    100%{transform:translateY(3px) scaleX(.86);opacity:.5}
   }
-  body[data-sheet="1"] #sheetCue{opacity:0;pointer-events:none;animation:none}
-  /* 끌고 있는 동안에도 손가락은 이 버튼이 잡고 있다 — 보이지만 않게 하고 이벤트는 둔다 */
-  body[data-sheet-drag="1"] #sheetCue{opacity:0;animation:none}
-  /* 한 번 열어 본 사람에게는 더 흔들지 않는다 */
-  body[data-cued="1"] #sheetCue{animation:none;opacity:.34;transform:none}
-  @media (prefers-reduced-motion:reduce){ #sheetCue{animation:none;opacity:.5} }
+  body[data-cued="1"] #sheetGrab span,
+  body[data-scrolled="1"] #sheetGrab span{animation:none;transform:none;opacity:1}
+  @media (prefers-reduced-motion:reduce){ #sheetGrab span{animation:none} }
+  .card{padding:14px 15px}
   #tip{font-size:11.5px;padding:7px 10px}
 }
-

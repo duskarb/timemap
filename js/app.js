@@ -685,53 +685,28 @@ function pick(px, py) {
 }
 
 /* ---- 모바일 제스처 ----
-   한 손가락: 지도를 끌지 않는다. 위아래로 밀면 아래 숫자(시트)가 손가락을 따라오고,
-             짧게 떼면 탭이다(정거장 선택 · 빈 곳을 두 번 치면 원위치).
-   두 손가락: 확대·축소만. 중심을 처음 두 손가락의 가운데로 고정해, 두 손가락으로
-             지도를 끌어 옮기는 일도 생기지 않게 한다. */
+   한 손가락은 지도가 받지 않는다. #stage 의 touch-action:pan-y 가 그대로 페이지
+   스크롤로 넘겨, 아래 숫자 판이 올라온다 — 관성도 고무줄도 브라우저 몫이다.
+   여기서 받는 건 두 손가락 확대와, 움직임 없는 탭(정거장 선택 · 두 번이면 원위치)뿐. */
 const touches = new Map();
-let pinch = null, swipe = null, lastTap = 0;
-function sheetProgress(p) {
-  document.body.dataset.sheetDrag = '1';
-  railR.style.transform = `translateY(${((1 - p) * 101).toFixed(2)}%)`;
-  document.body.style.setProperty('--sheet-p', p.toFixed(3));   // 지도 위 막도 같이 짙어진다
-}
-function sheetSettle(open) {
-  delete document.body.dataset.sheetDrag;
-  railR.style.transform = '';
-  document.body.style.removeProperty('--sheet-p');
-  document.body.dataset.sheet = open ? '1' : '0';
-  if (open) document.body.dataset.cued = '1';   // 한 번 열어 봤으면 더 흔들지 않는다
-}
-/* 시트를 열지 말지는 '얼마나 올렸나'만으로 정하면 안 된다. 시트 높이의 1/4 이면
-   폰에서 150px 이라, 짧게 튕겨 올리는 자연스러운 동작이 매번 도로 닫혔다.
-   손을 뗄 때의 속도를 먼저 보고(튕김), 느리게 끌었을 때만 거리로 정한다. */
-const FLICK = 0.28;                                   // px/ms
-function decideSheet(prog, vy) {
-  if (vy < -FLICK) return true;
-  if (vy > FLICK) return false;
-  return prog > 0.42;
-}
-function trackV(g, y) {
-  const t = performance.now(), dt = t - g.lt;
-  if (dt > 0) { g.vy = (y - g.ly) * 0.6 / dt + g.vy * 0.4; g.ly = y; g.lt = t; }
-}
+let pinch = null, tapAt = null, lastTap = 0;
 function startPinch() {
   const [a, b] = [...touches.values()];
-  if (swipe) { sheetSettle(swipe.open); swipe = null; }
+  tapAt = null;
   pinch = { d0: Math.max(28, Math.hypot(a.x - b.x, a.y - b.y)),
             mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2,
             s0: view.s, x0: view.x, y0: view.y };
 }
+/* iOS 는 두 손가락을 페이지 확대로 먼저 가져간다. 지도 위에서만 막는다. */
+for (const t of ['gesturestart', 'gesturechange', 'gestureend'])
+  cvs.addEventListener(t, e => e.preventDefault());
 cvs.addEventListener('pointerdown', e => {
   tip.hidden = true; hover = null;
   if (isPhone() && e.pointerType !== 'mouse') {
-    cvs.setPointerCapture(e.pointerId);
     touches.set(e.pointerId, rel(e));
-    if (touches.size >= 2) { startPinch(); return; }
-    const p = touches.get(e.pointerId), open = document.body.dataset.sheet === '1';
-    swipe = { id: e.pointerId, x0: p.x, y0: p.y, axis: 0, moved: 0, open,
-              prog: open ? 1 : 0, vy: 0, ly: p.y, lt: performance.now() };
+    if (touches.size >= 2) { cvs.setPointerCapture(e.pointerId); startPinch(); return; }
+    const p = touches.get(e.pointerId);
+    tapAt = { id: e.pointerId, x: p.x, y: p.y, moved: 0 };
     return;
   }
   cvs.setPointerCapture(e.pointerId); drag = rel(e); moved = 0;
@@ -750,17 +725,8 @@ cvs.addEventListener('pointermove', e => {
       clampView(); dirty = true;
       return;
     }
-    if (swipe && swipe.id === e.pointerId) {
-      const dx = p.x - swipe.x0, dy = p.y - swipe.y0;
-      swipe.moved = Math.max(swipe.moved, Math.abs(dx) + Math.abs(dy));
-      if (!swipe.axis && swipe.moved > 9) swipe.axis = Math.abs(dy) > Math.abs(dx) ? 1 : 2;
-      if (swipe.axis === 1) {
-        trackV(swipe, p.y);
-        const h = Math.max(140, railR.offsetHeight);
-        swipe.prog = Math.max(0, Math.min(1, (swipe.open ? 1 : 0) - dy / h));
-        sheetProgress(swipe.prog);
-      }
-    }
+    if (tapAt && tapAt.id === e.pointerId)
+      tapAt.moved = Math.max(tapAt.moved, Math.abs(p.x - tapAt.x) + Math.abs(p.y - tapAt.y));
     return;
   }
   if (drag) { view.x += p.x - drag.x; view.y += p.y - drag.y; moved += Math.abs(p.x - drag.x) + Math.abs(p.y - drag.y); drag = p; tip.hidden = true; dirty = true; return; }
@@ -784,17 +750,15 @@ function up(e) {
   if (touches.has(e.pointerId)) {
     touches.delete(e.pointerId);
     if (pinch) { if (touches.size < 2) { pinch = null; touches.clear(); } return; }
-    if (swipe && swipe.id === e.pointerId) {
-      if (swipe.axis === 1) {
-        sheetSettle(decideSheet(swipe.prog, swipe.vy));
-      } else if (swipe.moved < 9) {
-        const h = pick(swipe.x0, swipe.y0), t = performance.now();
+    if (tapAt && tapAt.id === e.pointerId) {
+      if (tapAt.moved < 9) {                     // 스크롤이 아니라 탭이었을 때만
+        const h = pick(tapAt.x, tapAt.y), t = performance.now();
         if (h >= 0) { lastTap = 0; setOrigin(h); }
         else if (t - lastTap < 320) {            // 빈 곳을 두 번 치면 원위치
           lastTap = 0; view = { s: 1, x: 0, y: 0 }; dirty = true;
         } else lastTap = t;
       }
-      swipe = null;
+      tapAt = null;
     }
     return;
   }
@@ -803,9 +767,10 @@ function up(e) {
 }
 cvs.addEventListener('pointerup', up);
 cvs.addEventListener('pointercancel', e => {
+  // 페이지가 스크롤로 가져가면 여기로 온다 — 탭도 확대도 아니었던 것으로 친다.
   if (touches.has(e.pointerId)) {
     touches.delete(e.pointerId);
-    if (swipe && swipe.id === e.pointerId) { sheetSettle(swipe.open); swipe = null; }
+    if (tapAt && tapAt.id === e.pointerId) tapAt = null;
     if (touches.size < 2) { pinch = null; }
     return;
   }
@@ -887,7 +852,7 @@ document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click'
     scen === 'tram' ? '라임 = 실제 크기 대전 · 금색 = 트램 후 시간지도 · 점선 = 현재'
                     : '라임 = 실제 크기 대전 · 올리브 = 현재 시간지도 · 점선 = 트램 후';
   tweenTo(mode === 'diff' ? 'geo' : mode, scen);
-  if (window.innerWidth < 821) document.body.dataset.sheet = '0';
+  if (window.innerWidth < 821 && scrollY > 4) scrollTo({ top: 0, behavior: 'smooth' });
 }));
 document.getElementById('originPick').addEventListener('change', e => {
   setOrigin(Number(e.target.value));
@@ -906,76 +871,29 @@ document.getElementById('originPick').addEventListener('change', e => {
   sel.value = String(origin);
 })();
 
-/* 손잡이는 '여기서 밀어 올리라'는 표시다. 그런데 버튼이라 pointerdown 을 제가
-   먹어 버려서, 정작 거기서 시작한 스와이프가 캔버스에 닿지 않았다. 같은 제스처를
-   여기서도 받는다 — 밀면 따라 올라오고, 톡 치면 그냥 열린다. */
-const sheetCue = document.getElementById('sheetCue');
-if (sheetCue) {
-  sheetCue.addEventListener('pointerdown', e => {
-    if (!isPhone()) return;
-    sheetCue.setPointerCapture(e.pointerId);
-    swipe = { id: e.pointerId, x0: e.clientX, y0: e.clientY, axis: 0, moved: 0,
-              open: false, prog: 0, vy: 0, ly: e.clientY, lt: performance.now(), cue: true };
+/* 숫자 판으로 내려가고 올라오는 건 전부 페이지 스크롤이다. 여기서 하는 일은
+   둘뿐 — 얼마나 내려왔는지를 지도 위 막(--sheet-p)에 넘기고, 유도 손잡이를
+   한 번 쓴 뒤에는 그만 흔드는 것. 손잡이를 톡 치면 부드럽게 데려다 준다. */
+const scrollShell = () => Math.max(1, (document.documentElement.clientHeight || innerHeight) - 46);
+let scrollTick = 0;
+function onScroll() {
+  if (scrollTick) return;
+  scrollTick = requestAnimationFrame(() => {
+    scrollTick = 0;
+    const p = Math.max(0, Math.min(1, (scrollY || 0) / scrollShell()));
+    document.body.style.setProperty('--sheet-p', p.toFixed(3));
+    if (p > 0.02) document.body.dataset.scrolled = '1';
+    else delete document.body.dataset.scrolled;
+    if (p > 0.6) document.body.dataset.cued = '1';
   });
-  sheetCue.addEventListener('pointermove', e => {
-    if (!swipe || swipe.id !== e.pointerId) return;
-    const dy = e.clientY - swipe.y0, dx = e.clientX - swipe.x0;
-    swipe.moved = Math.max(swipe.moved, Math.abs(dx) + Math.abs(dy));
-    if (!swipe.axis && swipe.moved > 9) swipe.axis = Math.abs(dy) > Math.abs(dx) ? 1 : 2;
-    if (swipe.axis !== 1) return;
-    trackV(swipe, e.clientY);
-    const h = Math.max(140, railR.offsetHeight);
-    swipe.prog = Math.max(0, Math.min(1, -dy / h));
-    sheetProgress(swipe.prog);
-  });
-  const cueEnd = e => {
-    if (!swipe || swipe.id !== e.pointerId) return;
-    sheetSettle(swipe.axis === 1 ? decideSheet(swipe.prog, swipe.vy) : true);  // 톡 치면 연다
-    swipe = null;
-  };
-  sheetCue.addEventListener('pointerup', cueEnd);
-  sheetCue.addEventListener('pointercancel', cueEnd);
 }
-const scrim = document.getElementById('scrim');
-scrim && scrim.addEventListener('click', () => sheetSettle(false));
-
-/* 올릴 때는 지도를 밀어 올렸으니 내릴 때도 밀어 내린다. × 를 찾아 누르게 하지 않는다.
-   시트 본문은 세로 스크롤을 쓰므로, 손잡이를 잡았거나 본문이 맨 위에 있을 때만
-   손가락을 가져온다(그때는 어차피 더 올라갈 데가 없다).
-   pointer 가 아니라 touch 로 받는 건, 스크롤을 넘겨받으려면 첫 touchmove 에서
-   preventDefault 해야 하는데 브라우저가 그걸 touch 이벤트로만 인정하기 때문이다. */
-let sheetPull = null;
-railR.addEventListener('touchstart', e => {
-  if (!isPhone() || e.touches.length !== 1 || document.body.dataset.sheet !== '1') return;
-  const onGrab = !!(e.target.closest && e.target.closest('#sheetGrab'));
-  if (!onGrab && railR.scrollTop > 1) return;
-  sheetPull = { y0: e.touches[0].clientY, x0: e.touches[0].clientX, axis: 0, prog: 1,
-                grab: onGrab, vy: 0, ly: e.touches[0].clientY, lt: performance.now() };
-}, { passive: true });
-railR.addEventListener('touchmove', e => {
-  if (!sheetPull || e.touches.length !== 1) return;
-  const dy = e.touches[0].clientY - sheetPull.y0, dx = e.touches[0].clientX - sheetPull.x0;
-  if (!sheetPull.axis) {
-    if (Math.abs(dy) + Math.abs(dx) < 8) return;
-    sheetPull.axis = Math.abs(dy) > Math.abs(dx) ? 1 : 2;
-  }
-  // 위로 끄는 건 본문 스크롤에 돌려준다(손잡이에서는 더 올라갈 곳이 없으니 붙잡는다).
-  if (sheetPull.axis !== 1 || (dy < 0 && !sheetPull.grab)) { sheetPull = null; return; }
-  e.preventDefault();
-  trackV(sheetPull, e.touches[0].clientY);
-  const h = Math.max(140, railR.offsetHeight);
-  sheetPull.prog = Math.max(0, Math.min(1, 1 - dy / h));
-  sheetProgress(sheetPull.prog);
-}, { passive: false });
-function endPull() {
-  if (!sheetPull) return;
-  if (sheetPull.axis === 1) sheetSettle(decideSheet(sheetPull.prog, sheetPull.vy));
-  sheetPull = null;
-}
-railR.addEventListener('touchend', endPull);
-railR.addEventListener('touchcancel', endPull);
+addEventListener('scroll', onScroll, { passive: true });
+const sheetGrab = document.getElementById('sheetGrab');
+sheetGrab && sheetGrab.addEventListener('click', () => {
+  document.body.dataset.cued = '1';
+  scrollTo({ top: scrollShell(), behavior: 'smooth' });
+});
 addEventListener('orientationchange', () => setTimeout(resize, 220));
-document.body.dataset.sheet = '0';
 
 resize();
 placeSegThumb(false);
