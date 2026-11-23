@@ -190,25 +190,20 @@ function layout() {
   const wide = VW >= 1241, mid = VW >= 821;
   const L = mid ? (wide ? 420 : 320) : 12;
   const R = mid ? (wide ? 372 : 300) : 12;
-  let T = mid ? 40 : 128, B = mid ? 40 : 138;
-  if (!mid) {
-    /* 위아래를 숫자로 박아 두면 노치가 큰 기기에서는 지도가 상태바 밑으로 잘리고,
-       작은 기기에서는 쓸데없이 빈다. 실제 자리를 재서 잡는다.
-       위는 '제목 아래'가 아니라 '상태바 아래'다 — 제목 아래로 밀면 세로가 모자라
-       지도가 폭 대신 높이에 갇혀 작아진다. 포스터처럼 제목 뒤로 흘리되
-       상태바에는 닿지 않게 한다. 아래는 모드바 알약 위까지. */
-    const rail = document.getElementById('railL'), seg = document.querySelector('.seg');
-    if (rail) T = Math.max(8, Math.round(rail.getBoundingClientRect().top) + 6);
-    if (seg) B = Math.max(96, Math.round(VH - seg.getBoundingClientRect().top) + 8);
-  }
+  let T = mid ? 40 : 0, B = mid ? 40 : 0;
+  /* 모바일에서는 지도를 가두지 않는다. 상자를 화면 전체로 두고 배율을 1보다
+     키워, 라임 대전이 좌우로 화면 밖까지 흘러나가게 한다. 제목·모드바·바까지
+     그 위에 얹히는 포스터 구성이다 — 작은 상자 안에 다 밀어 넣으면 바가
+     나타날 때마다 지도가 그만큼 쪼그라든다. */
+  ZOOM0 = mid ? 1 : 1.45;
   const x0 = L, x1 = VW - R, y0 = T, y1 = VH - B;
   BOX = { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: Math.max(160, x1 - x0), h: Math.max(160, y1 - y0) };
 }
 
-/** 기본 배율. 1 = 라임 지리 대전이 안전영역에 꽉 맞는 크기.
- *  1보다 키우면 지도가 제목·레일 아래로 흘러넘친다. view.s 와 별개라
- *  더블클릭 원위치는 이 배율로 돌아온다. */
-const ZOOM0 = 1;
+/** 기본 배율. 1 = 지도가 상자 안에 꼭 맞는 크기.
+ *  1보다 키우면 지도가 상자를 넘쳐 화면 밖으로 흘러간다. view.s 와 별개라
+ *  더블클릭 원위치는 이 배율로 돌아온다. layout() 이 화면 폭에 맞춰 정한다. */
+let ZOOM0 = 1;
 
 let geoFit = null;
 function fitGeo() {
@@ -567,8 +562,15 @@ function draw() {
   if (curT > 0.02 && mode !== 'diff') {
     ctx.save(); ctx.globalAlpha = curT * .85;
     const ccx = BOX.cx * view.s + view.x, ccy = BOX.cy * view.s + view.y;
-    /* 라벨 두 줄이 모드바 위에 걸치지 않게 지도 상자 바닥에서 조금 띄운다 */
-    const baseY = BOX.cy + BOX.h / 2 - (VW >= 821 ? 6 : 20), x1 = BOX.cx + BOX.w / 2;
+    /* 지도는 화면 밖까지 흘러도 눈금은 읽혀야 한다. 상자 바닥이 아니라
+       '보이는 화면 바닥(모드바 위)'을 기준으로 두 줄을 올려 붙인다. */
+    let baseY = BOX.cy + BOX.h / 2 - (VW >= 821 ? 6 : 20);
+    let x1 = BOX.cx + BOX.w / 2;
+    if (VW < 821) {
+      const seg = document.querySelector('.seg');
+      if (seg) baseY = Math.min(baseY, seg.getBoundingClientRect().top - 16);
+      x1 = Math.min(x1, VW - 10);
+    }
     ctx.strokeStyle = 'rgba(7,105,64,.55)'; ctx.lineWidth = 1.1;
     ctx.setLineDash([5, 7]);
     for (const m of RINGS) { const r = radial(m) * view.s;
