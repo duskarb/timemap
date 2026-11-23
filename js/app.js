@@ -192,12 +192,14 @@ function layout() {
   const R = mid ? (wide ? 372 : 300) : 12;
   let T = mid ? 40 : 128, B = mid ? 40 : 138;
   if (!mid) {
-    /* 위아래를 숫자로 박아 두면 노치·상태바가 큰 기기에서는 제목이 지도를 깔고
-       앉고, 작은 기기에서는 쓸데없이 비는다. 실제로 자리를 차지한 머리글과
-       모드바를 재서 그 사이를 지도 몫으로 준다. */
-    const o = document.getElementById('origin'), seg = document.querySelector('.seg');
-    if (o) T = Math.max(90, Math.round(o.getBoundingClientRect().bottom) + 12);
-    if (seg) B = Math.max(96, Math.round(VH - seg.getBoundingClientRect().top) + 12);
+    /* 위아래를 숫자로 박아 두면 노치가 큰 기기에서는 지도가 상태바 밑으로 잘리고,
+       작은 기기에서는 쓸데없이 빈다. 실제 자리를 재서 잡는다.
+       위는 '제목 아래'가 아니라 '상태바 아래'다 — 제목 아래로 밀면 세로가 모자라
+       지도가 폭 대신 높이에 갇혀 작아진다. 포스터처럼 제목 뒤로 흘리되
+       상태바에는 닿지 않게 한다. 아래는 모드바 알약 위까지. */
+    const rail = document.getElementById('railL'), seg = document.querySelector('.seg');
+    if (rail) T = Math.max(56, Math.round(parseFloat(getComputedStyle(rail).paddingTop)) - 4);
+    if (seg) B = Math.max(96, Math.round(VH - seg.getBoundingClientRect().top) + 8);
   }
   const x0 = L, x1 = VW - R, y0 = T, y1 = VH - B;
   BOX = { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: Math.max(160, x1 - x0), h: Math.max(160, y1 - y0) };
