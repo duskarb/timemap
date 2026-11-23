@@ -198,7 +198,7 @@ function layout() {
        지도가 폭 대신 높이에 갇혀 작아진다. 포스터처럼 제목 뒤로 흘리되
        상태바에는 닿지 않게 한다. 아래는 모드바 알약 위까지. */
     const rail = document.getElementById('railL'), seg = document.querySelector('.seg');
-    if (rail) T = Math.max(56, Math.round(parseFloat(getComputedStyle(rail).paddingTop)) - 4);
+    if (rail) T = Math.max(8, Math.round(rail.getBoundingClientRect().top) + 6);
     if (seg) B = Math.max(96, Math.round(VH - seg.getBoundingClientRect().top) + 8);
   }
   const x0 = L, x1 = VW - R, y0 = T, y1 = VH - B;
@@ -635,6 +635,7 @@ function step(now) {
 
 /* ---------- 리사이즈 ---------- */
 function resize() {
+  if ((scrollY || 0) < 3) measureShell();     // 바가 펴져 있을 때의 '진짜 보이는 높이'
   DPR = Math.min(devicePixelRatio || 1, 2);
   VW = cvs.clientWidth; VH = cvs.clientHeight;
   cvs.width = Math.round(VW * DPR); cvs.height = Math.round(VH * DPR);
@@ -658,16 +659,38 @@ function fitTitle() {
     h.style.fontSize = Math.max(16, Math.min(96, now * box / w)) + 'px';
   }
 }
+/* 셸 높이를 눈금이 아니라 실측으로 잡는다. svh 가 기기·사파리 버전마다 하단바를
+   얼마나 빼는지 미묘하게 달라서, 바 밑으로 UI 가 조금씩 깔리는 일이 생긴다.
+   visualViewport.height 는 '지금 실제로 보이는 높이'다. 바가 펴져 있는 상태
+   (= 맨 위)에서만 재서 못 박아 두면, 스크롤 중 바가 접혀도 셸이 흔들리지 않는다.
+   페이지 자체가 확대돼 있으면(scale>1) 그 값은 축소된 것이라 쓰지 않는다. */
+/* ?shell=754 로 '하단바가 먹는 높이'를 흉내 낼 수 있다 — 데스크톱 브라우저에는
+   사파리 바가 없어서 그냥은 재현이 안 된다. */
+const DBG_SHELL = +((location.search.match(/shell=(\d+)/) || [])[1] || 0);
+function measureShell() {
+  if (VW >= 821 && !DBG_SHELL) { document.documentElement.style.removeProperty('--shell-px'); return false; }
+  const vv = window.visualViewport;
+  if (vv && vv.scale > 1.02) return false;
+  const h = DBG_SHELL || Math.round(vv ? vv.height : innerHeight);
+  if (h < 320) return false;
+  const now = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--shell-px'));
+  if (Math.abs((now || 0) - h) < 2) return false;
+  document.documentElement.style.setProperty('--shell-px', h + 'px');
+  return true;
+}
 /* iOS 사파리는 주소창이 접히고 펴질 때마다 resize 를 쏟아낸다(dvh 라 높이가 실제로
    바뀐다). 전환 중에 끊기지 않도록, 크기가 정말 달라졌을 때만 다시 계산한다. */
 let rsTimer = 0;
-addEventListener('resize', () => {
+function scheduleResize() {
   clearTimeout(rsTimer);
   rsTimer = setTimeout(() => {
+    if (scrollY < 3) measureShell();        // 바가 펴져 있을 때만 셸을 다시 잰다
     if (cvs.clientWidth === VW && cvs.clientHeight === VH) return;
     resize();
   }, 120);
-});
+}
+addEventListener('resize', scheduleResize);
+window.visualViewport && visualViewport.addEventListener('resize', scheduleResize);
 
 /* ---------- 인터랙션 ---------- */
 const tip = document.getElementById('tip');
@@ -898,6 +921,47 @@ function onScroll() {
   });
 }
 addEventListener('scroll', onScroll, { passive: true });
+
+/* ---- 진단(?debug) ----
+   폰에서 실제로 어떤 숫자가 나오는지 화면에 찍는다. 안전영역·svh·실측 높이가
+   서로 다르면 그게 바 밑으로 깔리는 원인이다. 붉은 점선이 셸의 위아래 끝이다. */
+if (location.search.includes('debug')) {
+  const box = document.createElement('div'); box.id = 'dbg';
+  const lt = document.createElement('div'); lt.id = 'dbgLineT';
+  const lb = document.createElement('div'); lb.id = 'dbgLineB';
+  document.body.append(box, lt, lb);
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:absolute;visibility:hidden;top:0;left:0;' +
+    'height:100svh;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)';
+  document.body.appendChild(probe);
+  const p2 = document.createElement('div');
+  p2.style.cssText = 'position:absolute;visibility:hidden;top:0;left:0;height:100dvh;width:1px';
+  document.body.appendChild(p2);
+  const p3 = document.createElement('div');
+  p3.style.cssText = 'position:absolute;visibility:hidden;top:0;left:0;height:100lvh;width:1px';
+  document.body.appendChild(p3);
+  const n = v => Math.round(v);
+  setInterval(() => {
+    const vv = window.visualViewport, cs = getComputedStyle(probe);
+    const app = document.getElementById('app').getBoundingClientRect();
+    const seg = document.querySelector('.seg').getBoundingClientRect();
+    const h1 = document.querySelector('#head h1').getBoundingClientRect();
+    const rr = document.getElementById('railR').getBoundingClientRect();
+    lt.style.top = app.top + 'px'; lb.style.top = app.bottom + 'px';
+    box.textContent = [
+      `screen ${screen.width}x${screen.height} dpr${devicePixelRatio}`,
+      `inner ${innerWidth}x${innerHeight}  client ${document.documentElement.clientHeight}`,
+      `vv h${vv ? n(vv.height) : '-'} top${vv ? n(vv.offsetTop) : '-'} scale${vv ? vv.scale.toFixed(2) : '-'}`,
+      `svh ${n(parseFloat(cs.height))}  dvh ${n(p2.getBoundingClientRect().height)}  lvh ${n(p3.getBoundingClientRect().height)}`,
+      `safe T${n(parseFloat(cs.paddingTop))} B${n(parseFloat(cs.paddingBottom))}`,
+      `shell-px ${getComputedStyle(document.documentElement).getPropertyValue('--shell-px') || '(none)'}`,
+      `#app y ${n(app.top)}..${n(app.bottom)} (h ${n(app.height)})`,
+      `title ${n(h1.top)}..${n(h1.bottom)}  seg ${n(seg.top)}..${n(seg.bottom)}`,
+      `peek ${n(rr.top)}  scrollY ${n(scrollY)}/${n(document.documentElement.scrollHeight)}`,
+      `map box T${n(BOX.cy - BOX.h / 2)} B${n(BOX.cy + BOX.h / 2)}`,
+    ].join('\n');
+  }, 250);
+}
 const sheetGrab = document.getElementById('sheetGrab');
 sheetGrab && sheetGrab.addEventListener('click', () => {
   document.body.dataset.cued = '1';
