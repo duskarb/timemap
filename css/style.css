@@ -21,12 +21,12 @@
   color-scheme:light;
 }
 *{box-sizing:border-box}
-html,body{margin:0;height:100%;height:100dvh;overflow:hidden;background:var(--bg);color:var(--green);
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--green);
   font-family:var(--f-ui);-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%}
 /* iOS 사파리의 하단 주소창이 100% 높이 안쪽까지 올라와 모드 버튼을 먹었다.
    동적 뷰포트 단위(dvh)로 실제 보이는 높이만 쓰고, 아래에 붙는 UI 는 모두 #app 기준
    absolute 로 둬 주소창이 접히고 펴져도 같이 따라오게 한다. */
-#app{position:fixed;left:0;top:0;width:100%;height:100vh;height:100dvh}
+#app{position:fixed;left:0;top:0;width:100%;height:100vh}
 #stage{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab;touch-action:none}
 
 /* ============ 좌측 레일 ============ */
@@ -155,7 +155,8 @@ body[data-view="diff"] #reachCard{opacity:.5}
      안전영역 밖에서 시작해야 한다(지도는 포스터처럼 끝까지 깔린 채로 둔다). */
   /* 지도는 바 뒤까지 깔리되, 읽고 눌러야 하는 것들은 바 밖에 둔다. */
   #railL{left:0;right:0;width:auto;gap:12px;padding:14px 16px 0;
-    top:var(--safe-t);bottom:calc(var(--barh) + 4px);
+    top:var(--safe-t);
+    bottom:max(calc(var(--barh) + 4px), calc(var(--safe-b) + 6px));
     opacity:calc(1 - var(--sheet-p,0) * 1.25)}
   /* 제목은 두 줄로 접지 않고 한 줄로 폭을 꽉 채운다. 글자 수가 고정이라 크기만
      맞추면 되고, 크기는 app.js 의 fitTitle() 이 재서 넣는다(글꼴 로드·회전 후 다시). */
@@ -168,13 +169,9 @@ body[data-view="diff"] #reachCard{opacity:.5}
   #originPick{margin-top:0;width:auto;max-width:none;flex:1;min-width:130px;padding:7px 28px 7px 10px;font-size:12.5px}
   /* 아래 비쳐 두는 숫자 판(--peek)만큼은 비워 둔다. 안 그러면 안내 두 줄이
      반투명 판 뒤에 깔려 읽히지 않는다. */
-  /* 사파리 하단바는 뒤에 깔린 걸 그대로 비친다. 거기 라임색 지도가 있으면 바가
-     초록빛 회색으로 뜨는데, 스크롤로 바가 접혔다 펴질 때마다 색이 바뀌어 보인다.
-     바가 덮는 띠에 종이색을 부드럽게 깔아 둔다(바가 접히면 지도 아래 비네팅이 된다). */
-  #app::after{content:'';position:absolute;left:0;right:0;bottom:0;z-index:2;pointer-events:none;
-    height:calc(var(--barh) + 64px);
-    background:linear-gradient(to top,var(--bg) 0,
-      var(--bg) calc(var(--barh) + 2px),rgba(241,241,241,0) 100%)}
+  /* 바 자리에 종이색을 깔았더니 그게 '콘텐츠가 주소창 위에서 끝나고 아래는 빈
+     회색 박스'가 됐다. 걷어낸다 — 지도가 바 뒤까지 그대로 흐르고, 반투명한 바에는
+     그 지도가 비친다. 바 색이 곧 콘텐츠 색이 되는 게 원래 맞다. */
   #ctl{position:static;margin:auto -16px 0;
     padding:12px 16px calc(14px + var(--peek));gap:8px;
     background:linear-gradient(to top,var(--bg) 62%,rgba(241,241,241,0));z-index:4}
