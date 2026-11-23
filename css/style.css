@@ -191,9 +191,10 @@ body[data-view="diff"] #reachCard{opacity:.5}
     margin:calc(var(--shell) - var(--peek)) 0 0;min-height:var(--shell);
     background:rgba(241,241,241,.84);border-top:1.5px solid rgba(7,105,64,.22);
     border-radius:18px 18px 0 0;
-    /* 끝 문단이 사파리의 떠 있는 주소창에 먹히지 않도록 아래를 넉넉히 비운다.
-       그 바는 안전영역(env)에 잡히지 않아 직접 자리를 내줘야 한다. */
-    padding:8px 16px calc(92px + var(--safe-b));gap:12px;
+    /* 아래를 넉넉히 비워 두면 그게 곧 '주소창 위에서 끝나는 빈 회색 박스'다.
+       끝까지 내릴 때는 주소창이 접혀 있으니(작은 알약) 그만큼만 비운다 —
+       마지막 문단은 반투명한 바 뒤로 이어지고, 읽을 만큼은 위로 올라온다. */
+    padding:8px 16px calc(26px + var(--safe-b));gap:12px;
     box-shadow:0 -18px 40px rgba(7,105,64,.16)}
   /* 지도를 스크롤한 만큼 눌러 둔다(--sheet-p 는 app.js 가 스크롤에 맞춰 채운다) */
   #scrim{display:block;position:absolute;inset:0;z-index:5;pointer-events:none;
