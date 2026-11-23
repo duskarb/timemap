@@ -960,9 +960,21 @@ function onScroll() {
     if (p > 0.02) document.body.dataset.scrolled = '1';
     else delete document.body.dataset.scrolled;
     if (p > 0.6) document.body.dataset.cued = '1';
+    syncThemeColor();
   });
 }
 addEventListener('scroll', onScroll, { passive: true });
+
+/* 사파리 바는 제 색이 없다 — 뒤에 깔린 걸 비추거나 theme-color 를 쓴다. 바가
+   덮는 띠를 종이색으로 깔아 두고(css #app::after), theme-color 도 지금 그 자리에
+   실제로 깔린 색으로 맞춘다. 숫자 판이 올라오면 판 색, 아니면 종이색. */
+const themeMeta = document.querySelector('meta[name="theme-color"]');
+function syncThemeColor() {
+  if (!themeMeta) return;
+  const p = parseFloat(getComputedStyle(document.body).getPropertyValue('--sheet-p')) || 0;
+  const col = p > 0.5 ? '#eef0ef' : '#f1f1f1';
+  if (themeMeta.content !== col) themeMeta.content = col;
+}
 
 /* ---- 진단(?debug) ----
    폰에서 실제로 어떤 숫자가 나오는지 화면에 찍는다. 안전영역·svh·실측 높이가
