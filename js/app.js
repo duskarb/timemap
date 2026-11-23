@@ -263,6 +263,10 @@ let twStart = 0;
 /* 5차 smootherstep — 시작·끝에서 가속도까지 0 이라 cubic 보다 멈춤이 매끈하다. */
 const smooth = t => t * t * t * (t * (t * 6 - 15) + 10);
 let stats = null, hover = null;
+/* 지금까지는 아무것도 안 바뀌어도 매 프레임 지도를 통째로 다시 그렸다(정점 수천 개 ·
+   DPR 2). 폰에서는 그 자체로 열이 올라 시트를 끌 때도 프레임이 밀린다. 바뀐 게 있을
+   때만 그린다 — 모프 중 · 확대 중 · 출발지가 바뀐 직후 · 마우스가 정거장에 얹혔을 때. */
+let dirty = true;
 const GN = NC;
 const gridXY = new Float32Array(GN * 2);    // 그리드 지리 좌표(모프 없음)
 const gridCut = new Float32Array(GN);       // 트램으로 줄어드는 시간(분)
@@ -350,7 +354,7 @@ function makeDelays() {
 }
 let curReady = false;
 function settle() { const t = target(mode, scen); cur.set(t); from.set(t); to.set(t); tw = 1;
-  curT = toT = fromT = (mode === 'geo' || mode === 'diff') ? 0 : 1; curReady = true; }
+  curT = toT = fromT = (mode === 'geo' || mode === 'diff') ? 0 : 1; curReady = true; dirty = true; }
 
 /* ---------- 렌더 ---------- */
 /* 포스터 A1 최종본(Figma DDA_design 214:3169 "진짜Final") 팔레트 — css/style.css 의 :root 와 같은 값 */
@@ -521,13 +525,32 @@ function draw() {
     for (const m of RINGS) { const r = radial(m) * view.s;
       ctx.beginPath(); ctx.arc(ccx, ccy, r, 0, 7); ctx.stroke(); }
     ctx.setLineDash([]);
-    ctx.font = '700 11.5px Pretendard, sans-serif'; ctx.textAlign = 'center';
-    for (const m of RINGS) {
-      const x = ccx + radial(m) * view.s;
+    /* 라벨 자리. 반지름이 0.68제곱이라 바깥 링일수록 간격이 좁아져서, 한 줄에 다 늘어
+       놓으면 '90분120분150분'처럼 글자끼리 붙는다. 한 칸씩 위아래로 어긋나게 두어
+       줄당 간격을 두 배로 벌리고, 그래도 닿으면 그 라벨은 거른다.
+       바탕을 한 겹 깔아 두는 건 라벨이 역 동그라미·노선 위에 얹힐 때가 있어서다. */
+    ctx.font = '700 11.5px Pretendard, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    const rowY = [baseY, baseY - 16], rowEnd = [-1e9, -1e9], put = [];
+    for (let k = 0; k < RINGS.length; k++) {
+      const m = RINGS[k], x = ccx + radial(m) * view.s;
       if (x > x1 - 14 || x < BOX.cx - BOX.w / 2 || ccy > baseY - 24) continue;
+      const label = m + '분', w = ctx.measureText(label).width, row = k % 2;
+      if (x - w / 2 < rowEnd[row] + 7) continue;
+      rowEnd[row] = x + w / 2;
+      put.push({ x, y: rowY[row], label, w });
+    }
+    for (const p of put) {
       ctx.strokeStyle = 'rgba(7,105,64,.4)'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(x, ccy); ctx.lineTo(x, baseY - 14); ctx.stroke();
-      ctx.fillStyle = 'rgba(7,105,64,.85)'; ctx.fillText(m + '분', x, baseY);
+      ctx.beginPath(); ctx.moveTo(p.x, ccy); ctx.lineTo(p.x, p.y - 12); ctx.stroke();
+    }
+    for (const p of put) {
+      ctx.fillStyle = 'rgba(241,241,241,.84)';
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(p.x - p.w / 2 - 4, p.y - 11, p.w + 8, 15, 7)
+                    : ctx.rect(p.x - p.w / 2 - 4, p.y - 11, p.w + 8, 15);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(7,105,64,.85)'; ctx.fillText(p.label, p.x, p.y);
     }
     ctx.restore();
   }
@@ -581,6 +604,7 @@ function drawDiff() {
 
 function step(now) {
   if (tw < 1) {
+    dirty = true;
     /* 프레임 수로 세면(16/1400) 120Hz 화면에서 전환이 두 배 빨라지고, 프레임이
        빠질 때마다 끊긴다. 실제 경과 시간으로 센다. */
     tw = Math.min(1, (now - twStart) / MORPH_MS);
@@ -595,7 +619,7 @@ function step(now) {
     curT = fromT + (toT - fromT) * smooth(tw);
     curReady = true;
   }
-  draw();
+  if (dirty) { draw(); dirty = false; }
   requestAnimationFrame(step);
 }
 
@@ -606,7 +630,23 @@ function resize() {
   cvs.width = Math.round(VW * DPR); cvs.height = Math.round(VH * DPR);
   layout(); fitGeo(); recompute(); settle();
   clampView();
+  fitTitle();
   placeSegThumb(false);
+}
+/** 모바일 제목은 한 줄로 폭을 꽉 채운다. 글자 수가 고정이니 폭에 맞춰 크기만 바꾸면
+ *  되는데, 글꼴·자간이 em 비례라 '지금 폭 : 목표 폭' 한 번이면 거의 맞고 두 번이면 딱 맞다.
+ *  Range 로 재는 건 줄이 넘쳐도 실제 글자 폭이 그대로 나오기 때문이다. */
+function fitTitle() {
+  const h = document.querySelector('#head h1'); if (!h) return;
+  if (VW >= 821) { h.style.fontSize = ''; return; }
+  const box = h.clientWidth; if (!box) return;
+  const r = document.createRange();
+  for (let i = 0; i < 2; i++) {
+    r.selectNodeContents(h);
+    const w = r.getBoundingClientRect().width; if (!w) return;
+    const now = parseFloat(getComputedStyle(h).fontSize);
+    h.style.fontSize = Math.max(16, Math.min(96, now * box / w)) + 'px';
+  }
 }
 /* iOS 사파리는 주소창이 접히고 펴질 때마다 resize 를 쏟아낸다(dvh 라 높이가 실제로
    바뀐다). 전환 중에 끊기지 않도록, 크기가 정말 달라졌을 때만 다시 계산한다. */
@@ -654,11 +694,27 @@ let pinch = null, swipe = null, lastTap = 0;
 function sheetProgress(p) {
   document.body.dataset.sheetDrag = '1';
   railR.style.transform = `translateY(${((1 - p) * 101).toFixed(2)}%)`;
+  document.body.style.setProperty('--sheet-p', p.toFixed(3));   // 지도 위 막도 같이 짙어진다
 }
 function sheetSettle(open) {
   delete document.body.dataset.sheetDrag;
   railR.style.transform = '';
+  document.body.style.removeProperty('--sheet-p');
   document.body.dataset.sheet = open ? '1' : '0';
+  if (open) document.body.dataset.cued = '1';   // 한 번 열어 봤으면 더 흔들지 않는다
+}
+/* 시트를 열지 말지는 '얼마나 올렸나'만으로 정하면 안 된다. 시트 높이의 1/4 이면
+   폰에서 150px 이라, 짧게 튕겨 올리는 자연스러운 동작이 매번 도로 닫혔다.
+   손을 뗄 때의 속도를 먼저 보고(튕김), 느리게 끌었을 때만 거리로 정한다. */
+const FLICK = 0.28;                                   // px/ms
+function decideSheet(prog, vy) {
+  if (vy < -FLICK) return true;
+  if (vy > FLICK) return false;
+  return prog > 0.42;
+}
+function trackV(g, y) {
+  const t = performance.now(), dt = t - g.lt;
+  if (dt > 0) { g.vy = (y - g.ly) * 0.6 / dt + g.vy * 0.4; g.ly = y; g.lt = t; }
 }
 function startPinch() {
   const [a, b] = [...touches.values()];
@@ -674,7 +730,8 @@ cvs.addEventListener('pointerdown', e => {
     touches.set(e.pointerId, rel(e));
     if (touches.size >= 2) { startPinch(); return; }
     const p = touches.get(e.pointerId), open = document.body.dataset.sheet === '1';
-    swipe = { id: e.pointerId, x0: p.x, y0: p.y, axis: 0, moved: 0, open, prog: open ? 1 : 0 };
+    swipe = { id: e.pointerId, x0: p.x, y0: p.y, axis: 0, moved: 0, open,
+              prog: open ? 1 : 0, vy: 0, ly: p.y, lt: performance.now() };
     return;
   }
   cvs.setPointerCapture(e.pointerId); drag = rel(e); moved = 0;
@@ -690,7 +747,7 @@ cvs.addEventListener('pointermove', e => {
       view.s = ns;
       view.x = pinch.mx - (pinch.mx - pinch.x0) * k;
       view.y = pinch.my - (pinch.my - pinch.y0) * k;
-      clampView();
+      clampView(); dirty = true;
       return;
     }
     if (swipe && swipe.id === e.pointerId) {
@@ -698,6 +755,7 @@ cvs.addEventListener('pointermove', e => {
       swipe.moved = Math.max(swipe.moved, Math.abs(dx) + Math.abs(dy));
       if (!swipe.axis && swipe.moved > 9) swipe.axis = Math.abs(dy) > Math.abs(dx) ? 1 : 2;
       if (swipe.axis === 1) {
+        trackV(swipe, p.y);
         const h = Math.max(140, railR.offsetHeight);
         swipe.prog = Math.max(0, Math.min(1, (swipe.open ? 1 : 0) - dy / h));
         sheetProgress(swipe.prog);
@@ -705,9 +763,10 @@ cvs.addEventListener('pointermove', e => {
     }
     return;
   }
-  if (drag) { view.x += p.x - drag.x; view.y += p.y - drag.y; moved += Math.abs(p.x - drag.x) + Math.abs(p.y - drag.y); drag = p; tip.hidden = true; return; }
-  if (e.pointerType && e.pointerType !== 'mouse') { tip.hidden = true; hover = null; return; }
-  const h = pick(p.x, p.y); hover = h < 0 ? null : h;
+  if (drag) { view.x += p.x - drag.x; view.y += p.y - drag.y; moved += Math.abs(p.x - drag.x) + Math.abs(p.y - drag.y); drag = p; tip.hidden = true; dirty = true; return; }
+  if (e.pointerType && e.pointerType !== 'mouse') { tip.hidden = true; if (hover !== null) { hover = null; dirty = true; } return; }
+  const h = pick(p.x, p.y); const prev = hover; hover = h < 0 ? null : h;
+  if (hover !== prev) dirty = true;
   cvs.style.cursor = h < 0 ? 'grab' : 'pointer';
   if (h >= 0) {
     const s = ALL[h];
@@ -727,13 +786,12 @@ function up(e) {
     if (pinch) { if (touches.size < 2) { pinch = null; touches.clear(); } return; }
     if (swipe && swipe.id === e.pointerId) {
       if (swipe.axis === 1) {
-        // 열 때는 조금만 올려도 열리고, 닫을 때는 확실히 내려야 닫힌다.
-        sheetSettle(swipe.prog > (swipe.open ? .72 : .26));
+        sheetSettle(decideSheet(swipe.prog, swipe.vy));
       } else if (swipe.moved < 9) {
         const h = pick(swipe.x0, swipe.y0), t = performance.now();
         if (h >= 0) { lastTap = 0; setOrigin(h); }
         else if (t - lastTap < 320) {            // 빈 곳을 두 번 치면 원위치
-          lastTap = 0; view = { s: 1, x: 0, y: 0 };
+          lastTap = 0; view = { s: 1, x: 0, y: 0 }; dirty = true;
         } else lastTap = t;
       }
       swipe = null;
@@ -753,14 +811,15 @@ cvs.addEventListener('pointercancel', e => {
   }
   up(e);
 });
-cvs.addEventListener('pointerleave', () => { if (!drag) { tip.hidden = true; hover = null; } });
+cvs.addEventListener('pointerleave', () => { if (!drag) { tip.hidden = true; hover = null; dirty = true; } });
+addEventListener('blur', () => { tip.hidden = true; if (hover !== null) { hover = null; dirty = true; } });
 cvs.addEventListener('wheel', e => {
   e.preventDefault(); const p = rel(e); const f = e.deltaY < 0 ? 1.12 : 1 / 1.12;
   const ns = Math.max(.5, Math.min(6, view.s * f)); const k = ns / view.s;
   view.x = p.x - (p.x - view.x) * k; view.y = p.y - (p.y - view.y) * k; view.s = ns;
-  clampView();
+  clampView(); dirty = true;
 }, { passive: false });
-cvs.addEventListener('dblclick', () => { view = { s: 1, x: 0, y: 0 }; });
+cvs.addEventListener('dblclick', () => { view = { s: 1, x: 0, y: 0 }; dirty = true; });
 
 function setOrigin(i) {
   origin = i; recompute();
@@ -847,16 +906,80 @@ document.getElementById('originPick').addEventListener('change', e => {
   sel.value = String(origin);
 })();
 
-const sheetBtn = document.getElementById('sheetBtn');
-sheetBtn && sheetBtn.addEventListener('click', () => { document.body.dataset.sheet = '1'; });
-const sheetClose = document.getElementById('sheetClose');
-sheetClose && sheetClose.addEventListener('click', () => { document.body.dataset.sheet = '0'; });
+/* 손잡이는 '여기서 밀어 올리라'는 표시다. 그런데 버튼이라 pointerdown 을 제가
+   먹어 버려서, 정작 거기서 시작한 스와이프가 캔버스에 닿지 않았다. 같은 제스처를
+   여기서도 받는다 — 밀면 따라 올라오고, 톡 치면 그냥 열린다. */
+const sheetCue = document.getElementById('sheetCue');
+if (sheetCue) {
+  sheetCue.addEventListener('pointerdown', e => {
+    if (!isPhone()) return;
+    sheetCue.setPointerCapture(e.pointerId);
+    swipe = { id: e.pointerId, x0: e.clientX, y0: e.clientY, axis: 0, moved: 0,
+              open: false, prog: 0, vy: 0, ly: e.clientY, lt: performance.now(), cue: true };
+  });
+  sheetCue.addEventListener('pointermove', e => {
+    if (!swipe || swipe.id !== e.pointerId) return;
+    const dy = e.clientY - swipe.y0, dx = e.clientX - swipe.x0;
+    swipe.moved = Math.max(swipe.moved, Math.abs(dx) + Math.abs(dy));
+    if (!swipe.axis && swipe.moved > 9) swipe.axis = Math.abs(dy) > Math.abs(dx) ? 1 : 2;
+    if (swipe.axis !== 1) return;
+    trackV(swipe, e.clientY);
+    const h = Math.max(140, railR.offsetHeight);
+    swipe.prog = Math.max(0, Math.min(1, -dy / h));
+    sheetProgress(swipe.prog);
+  });
+  const cueEnd = e => {
+    if (!swipe || swipe.id !== e.pointerId) return;
+    sheetSettle(swipe.axis === 1 ? decideSheet(swipe.prog, swipe.vy) : true);  // 톡 치면 연다
+    swipe = null;
+  };
+  sheetCue.addEventListener('pointerup', cueEnd);
+  sheetCue.addEventListener('pointercancel', cueEnd);
+}
+const scrim = document.getElementById('scrim');
+scrim && scrim.addEventListener('click', () => sheetSettle(false));
+
+/* 올릴 때는 지도를 밀어 올렸으니 내릴 때도 밀어 내린다. × 를 찾아 누르게 하지 않는다.
+   시트 본문은 세로 스크롤을 쓰므로, 손잡이를 잡았거나 본문이 맨 위에 있을 때만
+   손가락을 가져온다(그때는 어차피 더 올라갈 데가 없다).
+   pointer 가 아니라 touch 로 받는 건, 스크롤을 넘겨받으려면 첫 touchmove 에서
+   preventDefault 해야 하는데 브라우저가 그걸 touch 이벤트로만 인정하기 때문이다. */
+let sheetPull = null;
+railR.addEventListener('touchstart', e => {
+  if (!isPhone() || e.touches.length !== 1 || document.body.dataset.sheet !== '1') return;
+  const onGrab = !!(e.target.closest && e.target.closest('#sheetGrab'));
+  if (!onGrab && railR.scrollTop > 1) return;
+  sheetPull = { y0: e.touches[0].clientY, x0: e.touches[0].clientX, axis: 0, prog: 1,
+                grab: onGrab, vy: 0, ly: e.touches[0].clientY, lt: performance.now() };
+}, { passive: true });
+railR.addEventListener('touchmove', e => {
+  if (!sheetPull || e.touches.length !== 1) return;
+  const dy = e.touches[0].clientY - sheetPull.y0, dx = e.touches[0].clientX - sheetPull.x0;
+  if (!sheetPull.axis) {
+    if (Math.abs(dy) + Math.abs(dx) < 8) return;
+    sheetPull.axis = Math.abs(dy) > Math.abs(dx) ? 1 : 2;
+  }
+  // 위로 끄는 건 본문 스크롤에 돌려준다(손잡이에서는 더 올라갈 곳이 없으니 붙잡는다).
+  if (sheetPull.axis !== 1 || (dy < 0 && !sheetPull.grab)) { sheetPull = null; return; }
+  e.preventDefault();
+  trackV(sheetPull, e.touches[0].clientY);
+  const h = Math.max(140, railR.offsetHeight);
+  sheetPull.prog = Math.max(0, Math.min(1, 1 - dy / h));
+  sheetProgress(sheetPull.prog);
+}, { passive: false });
+function endPull() {
+  if (!sheetPull) return;
+  if (sheetPull.axis === 1) sheetSettle(decideSheet(sheetPull.prog, sheetPull.vy));
+  sheetPull = null;
+}
+railR.addEventListener('touchend', endPull);
+railR.addEventListener('touchcancel', endPull);
 addEventListener('orientationchange', () => setTimeout(resize, 220));
 document.body.dataset.sheet = '0';
 
 resize();
 placeSegThumb(false);
-document.fonts && document.fonts.ready.then(() => placeSegThumb(false));  // 글꼴 바뀌면 폭도 바뀐다
+document.fonts && document.fonts.ready.then(() => { fitTitle(); placeSegThumb(false); });  // 글꼴 바뀌면 폭도 바뀐다
 document.getElementById('originName').textContent = ALL[origin].name;
 document.getElementById('originLine').textContent = ALL[origin].line;
 document.body.dataset.scen = scen;

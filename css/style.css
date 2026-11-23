@@ -117,8 +117,11 @@ body[data-view="diff"] #reachCard{opacity:.5}
   display:flex;flex-direction:column;gap:2px;max-width:70vw}
 #tip b{font-size:13.5px} #tip span{opacity:.75} #tip .t{opacity:1}
 #tip em{font-style:normal;font-weight:700} #tip em.o{color:var(--lime)}
+/* #tip 의 display:flex 가 UA 기본 [hidden]{display:none} 를 이겨서, 한 번 뜬 역 카드가
+   호버를 벗어나도 사라지지 않았다. 명시적으로 되돌린다. */
+#tip[hidden]{display:none}
 
-#sheetBtn{display:none}
+#sheetCue,#scrim,#sheetGrab{display:none}
 
 /* ============ 태블릿 ============ */
 @media (max-width:1240px){
@@ -130,7 +133,11 @@ body[data-view="diff"] #reachCard{opacity:.5}
 @media (max-width:820px){
   :root{--pad:16px}
   #railL{left:0;right:0;top:0;bottom:0;width:auto;padding:16px 16px 0;gap:12px}
-  #head h1{font-size:54px;margin-bottom:6px}
+  /* 제목은 두 줄로 접지 않고 한 줄로 폭을 꽉 채운다. 글자 수가 고정이라 크기만
+     맞추면 되고, 크기는 app.js 의 fitTitle() 이 재서 넣는다(글꼴 로드·회전 후 다시). */
+  #head h1{font-size:34px;margin:0 0 12px;line-height:1.04;letter-spacing:-.02em;
+    white-space:nowrap;overflow:hidden}
+  #head h1 br{display:none}
   #head p{display:none}
   #origin{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
   #origin .lab{display:none} #origin .big{font-size:22px} #origin .sub{margin:0;font-size:12px}
@@ -147,27 +154,57 @@ body[data-view="diff"] #reachCard{opacity:.5}
   #hintM{display:block}
   #ghostNote{font-size:12px}
 
-  /* 통계 = 하단 시트 */
+  /* 통계 = 위로 밀어 올리는 반투명 시트. 불투명하게 덮으면 지도가 사라져 방금
+     고른 출발지와 숫자가 끊긴다. 뒤가 비쳐야 '같은 지도의 숫자'로 읽힌다. */
   #railR{left:0;right:0;top:auto;bottom:0;width:auto;max-height:74vh;max-height:74dvh;
     touch-action:pan-y;
-    background:var(--bg);border-top:1.5px solid var(--green-18);border-radius:16px 16px 0 0;
+    background:rgba(241,241,241,.72);border-top:1.5px solid rgba(7,105,64,.22);
+    border-radius:18px 18px 0 0;
+    -webkit-backdrop-filter:blur(18px) saturate(1.25);backdrop-filter:blur(18px) saturate(1.25);
     padding:8px 16px calc(20px + var(--safe-b));gap:12px;
-    transform:translateY(101%);transition:transform .3s cubic-bezier(.4,0,.2,1);z-index:6;
-    box-shadow:0 -14px 34px rgba(7,105,64,.14)}
+    transform:translateY(101%);transition:transform .38s cubic-bezier(.22,1,.3,1);z-index:6;
+    box-shadow:0 -18px 40px rgba(7,105,64,.16)}
   body[data-sheet="1"] #railR{transform:none}
   /* 손가락을 따라오는 동안에는 app.js 가 transform 을 직접 넣으므로 전환을 끈다 */
   body[data-sheet-drag="1"] #railR{transition:none}
-  #railR::before{content:'';display:block;width:38px;height:4px;border-radius:2px;
-    background:var(--green-18);margin:2px auto 6px;flex:none}
+  /* 시트가 올라온 만큼 지도를 눌러 둔다(--sheet-p 는 app.js 가 끌리는 동안 채운다) */
+  #scrim{display:block;position:absolute;inset:0;z-index:5;pointer-events:none;
+    background:rgba(7,105,64,.16);opacity:var(--sheet-p,0);transition:opacity .38s ease}
+  body[data-sheet="1"]{--sheet-p:1}
+  body[data-sheet-drag="1"] #scrim{transition:none}
+  /* 손잡이는 ::before 가 아니라 진짜 요소다 — 여기서 손가락을 받아 시트를 내린다.
+     시트 본문은 세로 스크롤을 쓰므로(touch-action:pan-y) 손잡이만 none 으로 떼어 둔다. */
+  #sheetGrab{display:flex;justify-content:center;align-items:center;height:22px;flex:none;
+    touch-action:none;cursor:grab;margin:-2px -16px 2px;position:relative;z-index:1}
+  #sheetGrab span{display:block;width:38px;height:4px;border-radius:2px;background:var(--green-18)}
+  /* 끌리는 동안에는 블러를 끈다. 움직이는 면 뒤를 매 프레임 다시 흐리게 만드는 건
+     모바일에서 가장 비싼 연산이라, 켜 두면 시트가 손가락을 못 따라온다. */
+  body[data-sheet-drag="1"] #railR{backdrop-filter:none;-webkit-backdrop-filter:none;
+    background:rgba(241,241,241,.88)}
+  body[data-sheet="1"] #scrim{pointer-events:auto}
   .card{padding:14px 15px}
-  #sheetBtn{display:flex;position:absolute;right:16px;bottom:calc(96px + var(--safe-b));z-index:5;
-    align-items:center;gap:7px;appearance:none;border:1.5px solid var(--green-18);
-    background:rgba(255,255,255,.9);color:var(--green);font:700 12.5px var(--f-ui);
-    padding:10px 15px;border-radius:999px;cursor:pointer;box-shadow:0 6px 18px rgba(7,105,64,.12)}
-  body[data-sheet="1"] #sheetBtn{opacity:0;pointer-events:none}
-  #sheetClose{display:block;position:absolute;right:14px;top:12px;appearance:none;border:0;
-    background:transparent;color:var(--green-50);font:700 20px var(--f-ui);cursor:pointer;line-height:1}
+  /* 올라올 것이 있다는 신호는 글자 없이 움직임으로만 준다. 카드로 띄우면 지도 위에
+     또 하나의 판이 생기고, 정작 '미는' 동작은 알려 주지 못한다. */
+  #sheetCue{display:flex;position:absolute;left:50%;bottom:calc(100px + var(--safe-b));z-index:5;
+    flex-direction:column;align-items:center;gap:6px;margin-left:-28px;width:56px;
+    appearance:none;border:0;background:transparent;padding:6px 0;cursor:pointer;
+    -webkit-tap-highlight-color:transparent;touch-action:none;
+    animation:cueBob 3.1s cubic-bezier(.4,0,.3,1) infinite}
+  #sheetCue .chev{width:13px;height:13px;border-left:2.2px solid var(--green);
+    border-top:2.2px solid var(--green);transform:rotate(45deg);border-radius:1px}
+  #sheetCue .bar{width:30px;height:3.5px;border-radius:2px;background:var(--green-18)}
+  @keyframes cueBob{
+    0%{transform:translateY(7px);opacity:.2}
+    30%{transform:translateY(-1px);opacity:.92}
+    62%{transform:translateY(-6px);opacity:.42}
+    100%{transform:translateY(7px);opacity:.2}
+  }
+  body[data-sheet="1"] #sheetCue{opacity:0;pointer-events:none;animation:none}
+  /* 끌고 있는 동안에도 손가락은 이 버튼이 잡고 있다 — 보이지만 않게 하고 이벤트는 둔다 */
+  body[data-sheet-drag="1"] #sheetCue{opacity:0;animation:none}
+  /* 한 번 열어 본 사람에게는 더 흔들지 않는다 */
+  body[data-cued="1"] #sheetCue{animation:none;opacity:.34;transform:none}
+  @media (prefers-reduced-motion:reduce){ #sheetCue{animation:none;opacity:.5} }
   #tip{font-size:11.5px;padding:7px 10px}
 }
-@media (min-width:821px){#sheetClose{display:none}}
-@media (max-width:400px){ #head h1{font-size:46px} }
+
