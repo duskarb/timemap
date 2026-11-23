@@ -17,6 +17,7 @@
   --f-head:'KIMM Bold','KIMM_Bold',Paperlogy,Pretendard,'Apple SD Gothic Neo',sans-serif;
   --f-ui:Paperlogy,Pretendard,'Apple SD Gothic Neo','Malgun Gothic',sans-serif;
   --safe-b:env(safe-area-inset-bottom,0px);
+  --safe-t:env(safe-area-inset-top,0px);
   color-scheme:light;
 }
 *{box-sizing:border-box}
@@ -146,7 +147,10 @@ body[data-view="diff"] #reachCard{opacity:.5}
   :root{--pad:16px;--shell:100vh;--shell:100svh;--peek:46px}
   /* 숫자가 올라오는 만큼 지도 화면의 글자는 물러난다. 반투명 판 뒤로 제목이
      비쳐 들어와 숫자와 겹쳐 읽히는 걸 막는다. */
-  #railL{left:0;right:0;top:0;bottom:0;width:auto;padding:16px 16px 0;gap:12px;
+  /* viewport-fit=cover 라 화면이 상태바·노치 아래까지 내려와 있다. 글자는 그
+     안전영역 밖에서 시작해야 한다(지도는 포스터처럼 끝까지 깔린 채로 둔다). */
+  #railL{left:0;right:0;top:0;bottom:0;width:auto;gap:12px;
+    padding:calc(14px + var(--safe-t)) 16px 0;
     opacity:calc(1 - var(--sheet-p,0) * 1.25)}
   /* 제목은 두 줄로 접지 않고 한 줄로 폭을 꽉 채운다. 글자 수가 고정이라 크기만
      맞추면 되고, 크기는 app.js 의 fitTitle() 이 재서 넣는다(글꼴 로드·회전 후 다시). */
@@ -178,7 +182,9 @@ body[data-view="diff"] #reachCard{opacity:.5}
     margin:calc(var(--shell) - var(--peek)) 0 0;min-height:var(--shell);
     background:rgba(241,241,241,.84);border-top:1.5px solid rgba(7,105,64,.22);
     border-radius:18px 18px 0 0;
-    padding:8px 16px calc(28px + var(--safe-b));gap:12px;
+    /* 끝 문단이 사파리의 떠 있는 주소창에 먹히지 않도록 아래를 넉넉히 비운다.
+       그 바는 안전영역(env)에 잡히지 않아 직접 자리를 내줘야 한다. */
+    padding:8px 16px calc(92px + var(--safe-b));gap:12px;
     box-shadow:0 -18px 40px rgba(7,105,64,.16)}
   /* 지도를 스크롤한 만큼 눌러 둔다(--sheet-p 는 app.js 가 스크롤에 맞춰 채운다) */
   #scrim{display:block;position:absolute;inset:0;z-index:5;pointer-events:none;

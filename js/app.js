@@ -190,8 +190,15 @@ function layout() {
   const wide = VW >= 1241, mid = VW >= 821;
   const L = mid ? (wide ? 420 : 320) : 12;
   const R = mid ? (wide ? 372 : 300) : 12;
-  const T = mid ? 40 : 128;
-  const B = mid ? 40 : 138;
+  let T = mid ? 40 : 128, B = mid ? 40 : 138;
+  if (!mid) {
+    /* 위아래를 숫자로 박아 두면 노치·상태바가 큰 기기에서는 제목이 지도를 깔고
+       앉고, 작은 기기에서는 쓸데없이 비는다. 실제로 자리를 차지한 머리글과
+       모드바를 재서 그 사이를 지도 몫으로 준다. */
+    const o = document.getElementById('origin'), seg = document.querySelector('.seg');
+    if (o) T = Math.max(90, Math.round(o.getBoundingClientRect().bottom) + 12);
+    if (seg) B = Math.max(96, Math.round(VH - seg.getBoundingClientRect().top) + 12);
+  }
   const x0 = L, x1 = VW - R, y0 = T, y1 = VH - B;
   BOX = { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: Math.max(160, x1 - x0), h: Math.max(160, y1 - y0) };
 }
@@ -519,7 +526,8 @@ function draw() {
   if (curT > 0.02 && mode !== 'diff') {
     ctx.save(); ctx.globalAlpha = curT * .85;
     const ccx = BOX.cx * view.s + view.x, ccy = BOX.cy * view.s + view.y;
-    const baseY = BOX.cy + BOX.h / 2 - 6, x1 = BOX.cx + BOX.w / 2;
+    /* 라벨 두 줄이 모드바 위에 걸치지 않게 지도 상자 바닥에서 조금 띄운다 */
+    const baseY = BOX.cy + BOX.h / 2 - (VW >= 821 ? 6 : 20), x1 = BOX.cx + BOX.w / 2;
     ctx.strokeStyle = 'rgba(7,105,64,.55)'; ctx.lineWidth = 1.1;
     ctx.setLineDash([5, 7]);
     for (const m of RINGS) { const r = radial(m) * view.s;
@@ -628,9 +636,9 @@ function resize() {
   DPR = Math.min(devicePixelRatio || 1, 2);
   VW = cvs.clientWidth; VH = cvs.clientHeight;
   cvs.width = Math.round(VW * DPR); cvs.height = Math.round(VH * DPR);
+  fitTitle();                     // 제목 크기가 정해져야 머리글이 차지하는 높이가 나온다
   layout(); fitGeo(); recompute(); settle();
   clampView();
-  fitTitle();
   placeSegThumb(false);
 }
 /** 모바일 제목은 한 줄로 폭을 꽉 채운다. 글자 수가 고정이니 폭에 맞춰 크기만 바꾸면
@@ -897,7 +905,8 @@ addEventListener('orientationchange', () => setTimeout(resize, 220));
 
 resize();
 placeSegThumb(false);
-document.fonts && document.fonts.ready.then(() => { fitTitle(); placeSegThumb(false); });  // 글꼴 바뀌면 폭도 바뀐다
+// 글꼴이 바뀌면 제목 폭도 머리글 높이도 달라진다 — 지도 자리까지 다시 잡는다
+document.fonts && document.fonts.ready.then(() => resize());
 document.getElementById('originName').textContent = ALL[origin].name;
 document.getElementById('originLine').textContent = ALL[origin].line;
 document.body.dataset.scen = scen;
