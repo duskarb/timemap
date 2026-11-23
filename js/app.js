@@ -272,6 +272,14 @@ let twStart = 0;
 /* 5차 smootherstep — 시작·끝에서 가속도까지 0 이라 cubic 보다 멈춤이 매끈하다. */
 const smooth = t => t * t * t * (t * (t * 6 - 15) + 10);
 let stats = null, hover = null;
+/* 시간지도에서는 출발지 가까운 역들이 한 점으로 몰려 흰 점이 떡진다. 화면에서
+   겹치는 점은 솎아 내되, 솎는 순서가 중요하다 — 환승역, 1호선, 트램 순으로
+   자리를 먼저 잡게 해서 노선의 골격이 남게 한다. 같은 등급 안에서는 정거장
+   순서를 그대로 따르므로, 촘촘한 구간에서는 한 칸 걸러 하나씩 살아남는다.
+   확대하면 화면 간격이 벌어지니 저절로 다시 나타난다. */
+const dotRank = s => (s.line === '1호선·트램' ? 0 : s.line === '1호선' ? 1 : 2);
+const DOT_ORDER = ALL.map((_, i) => i).sort((a, b) => dotRank(ALL[a]) - dotRank(ALL[b]));
+const dotA = new Float32Array(ALL.length).fill(1);   // 점마다의 보임 정도(0~1)
 /* 지금까지는 아무것도 안 바뀌어도 매 프레임 지도를 통째로 다시 그렸다(정점 수천 개 ·
    DPR 2). 폰에서는 그 자체로 열이 올라 시트를 끌 때도 프레임이 밀린다. 바뀐 게 있을
    때만 그린다 — 모프 중 · 확대 중 · 출발지가 바뀐 직후 · 마우스가 정거장에 얹혔을 때. */
@@ -509,20 +517,51 @@ function draw() {
   ctx.fillStyle = 'rgba(11,58,38,.62)'; ctx.font = '700 15px Pretendard, sans-serif'; ctx.textAlign = 'center';
   for (let i = 0; i < D.guLabels.length; i++) { const [x, y] = P(GU_S + i); ctx.fillText(D.guLabels[i].name, x, y); }
 
-  // 정거장
-  for (let i = 0; i < ALL.length; i++) {
-    const s = ALL[i], [x, y] = P(NODE_S + i);
-    if (isTramOnly(s) && scen === 'now') continue;
+  // 정거장 — 화면에서 겹치는 점은 솎아 낸다(위 DOT_ORDER 의 우선순위대로)
+  const rr = VW >= 821 ? 3.2 : 4.2;
+  /* 얼마나 벌릴지는 시간지도로 간 정도(curT)에 비례한다. 지리 지도에서 점이
+     구슬처럼 이어 붙는 건 포스터의 생김새라 건드리지 않고(거의 겹친 것만 솎음),
+     시간지도로 갈수록 떡지므로 사이를 벌려 솎아 낸다. */
+  const gapK = -0.6 + 4.6 * curT;
+  const taken = [[...P(NODE_S + origin), rr * (1.6 + 1.8 * curT)]];   // 출발지 핀 둘레
+  const vis = new Uint8Array(ALL.length);
+  const free = (x, y, rad) => {
+    for (let k = 0; k < taken.length; k++) {
+      const m = taken[k][2] + rad + gapK;
+      if ((taken[k][0] - x) ** 2 + (taken[k][1] - y) ** 2 < m * m) return false;
+    }
+    return true;
+  };
+  for (const i of DOT_ORDER) {
     if (i === origin) continue;                 // 출발지는 핀으로 그린다
-    const isH = hover === i;
-    const rr = VW >= 821 ? 3.2 : 4.2;
-    ctx.beginPath(); ctx.arc(x, y, isH ? rr + 2.5 : rr, 0, 7);
+    if (isTramOnly(ALL[i]) && scen === 'now') continue;
+    const [x, y] = P(NODE_S + i);
+    if (hover !== i && !free(x, y, rr)) continue;
+    taken.push([x, y, rr]); vis[i] = 1;
+  }
+  /* 모프 중에는 살아남는 점이 프레임마다 바뀐다. 그냥 끄고 켜면 깜빡이므로
+     짧게 녹아들고 녹아 나가게 한다. 아직 변하는 중이면 다음 프레임을 요청한다. */
+  let fading = false;
+  for (let i = 0; i < ALL.length; i++) {
+    const t = vis[i] ? 1 : 0, a = dotA[i];
+    if (Math.abs(t - a) > 0.015) { dotA[i] = a + (t - a) * 0.2; fading = true; }
+    else dotA[i] = t;
+  }
+  if (fading) dirty = true;
+  for (let i = 0; i < ALL.length; i++) {
+    const a = dotA[i];
+    if (a < 0.02 || i === origin) continue;
+    if (isTramOnly(ALL[i]) && scen === 'now') continue;
+    const [x, y] = P(NODE_S + i), isH = hover === i;
+    ctx.globalAlpha = a;
+    ctx.beginPath(); ctx.arc(x, y, isH ? rr + 2.5 : rr * (0.55 + 0.45 * a), 0, 7);
     ctx.fillStyle = '#fff';
     ctx.fill();
     ctx.lineWidth = 1.5;
-    ctx.strokeStyle = isTramOnly(s) ? C.orangeDeep : C.green;
+    ctx.strokeStyle = isTramOnly(ALL[i]) ? C.orangeDeep : C.green;
     ctx.stroke();
   }
+  ctx.globalAlpha = 1;
 
   // 시간 링 (채움 위) — 포스터처럼 초록 점선 + 오른쪽 끝에서 아래로 내린 리더선·라벨
   if (curT > 0.02 && mode !== 'diff') {
@@ -629,7 +668,7 @@ function step(now) {
     curT = fromT + (toT - fromT) * smooth(tw);
     curReady = true;
   }
-  if (dirty) { draw(); dirty = false; }
+  if (dirty) { dirty = false; draw(); }   // draw 안에서 다시 세울 수 있다(점 페이드)
   requestAnimationFrame(step);
 }
 
@@ -711,6 +750,7 @@ function pick(px, py) {
   const HIT = VW >= 821 ? 16 : 22; let best = -1, bd = HIT * HIT;
   for (let i = 0; i < ALL.length; i++) {
     if (isTramOnly(ALL[i]) && scen === 'now') continue;
+    if (dotA[i] < 0.5) continue;        // 솎여서 안 보이는 점은 집히지도 않는다
     const [x, y] = P(NODE_S + i); const d = (x - px) ** 2 + (y - py) ** 2;
     if (d < bd) { bd = d; best = i; }
   }

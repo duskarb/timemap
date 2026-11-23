@@ -168,6 +168,12 @@ body[data-view="diff"] #reachCard{opacity:.5}
   #originPick{margin-top:0;width:auto;max-width:none;flex:1;min-width:130px;padding:7px 28px 7px 10px;font-size:12.5px}
   /* 아래 비쳐 두는 숫자 판(--peek)만큼은 비워 둔다. 안 그러면 안내 두 줄이
      반투명 판 뒤에 깔려 읽히지 않는다. */
+  /* 사파리 하단바는 뒤에 깔린 걸 그대로 비친다. 거기 라임색 지도가 있으면 바가
+     초록빛 회색으로 뜨는데, 스크롤로 바가 접혔다 펴질 때마다 색이 바뀌어 보인다.
+     바가 덮는 띠에 종이색을 부드럽게 깔아 둔다(바가 접히면 지도 아래 비네팅이 된다). */
+  #app::after{content:'';position:absolute;left:0;right:0;bottom:0;z-index:2;pointer-events:none;
+    height:calc(var(--barh) + 54px);
+    background:linear-gradient(to top,var(--bg) 46%,rgba(241,241,241,0))}
   #ctl{position:static;margin:auto -16px 0;
     padding:12px 16px calc(14px + var(--peek));gap:8px;
     background:linear-gradient(to top,var(--bg) 62%,rgba(241,241,241,0));z-index:4}
