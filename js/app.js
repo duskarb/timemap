@@ -190,16 +190,20 @@ function layout() {
   const wide = VW >= 1241, mid = VW >= 821;
   const L = mid ? (wide ? 420 : 320) : 12;
   const R = mid ? (wide ? 372 : 300) : 12;
-  const T = mid ? 40 : 128;
-  const B = mid ? 40 : 138;
+  let T = mid ? 40 : 0, B = mid ? 40 : 0;
+  /* 모바일에서는 지도를 가두지 않는다. 상자를 화면 전체로 두고 배율을 1보다
+     키워, 라임 대전이 좌우로 화면 밖까지 흘러나가게 한다. 제목·모드바·바까지
+     그 위에 얹히는 포스터 구성이다 — 작은 상자 안에 다 밀어 넣으면 바가
+     나타날 때마다 지도가 그만큼 쪼그라든다. */
+  ZOOM0 = mid ? 1 : 1.45;
   const x0 = L, x1 = VW - R, y0 = T, y1 = VH - B;
   BOX = { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: Math.max(160, x1 - x0), h: Math.max(160, y1 - y0) };
 }
 
-/** 기본 배율. 1 = 라임 지리 대전이 안전영역에 꽉 맞는 크기.
- *  1보다 키우면 지도가 제목·레일 아래로 흘러넘친다. view.s 와 별개라
- *  더블클릭 원위치는 이 배율로 돌아온다. */
-const ZOOM0 = 1;
+/** 기본 배율. 1 = 지도가 상자 안에 꼭 맞는 크기.
+ *  1보다 키우면 지도가 상자를 넘쳐 화면 밖으로 흘러간다. view.s 와 별개라
+ *  더블클릭 원위치는 이 배율로 돌아온다. layout() 이 화면 폭에 맞춰 정한다. */
+let ZOOM0 = 1;
 
 let geoFit = null;
 function fitGeo() {
@@ -254,7 +258,27 @@ const minsNow = new Float32Array(N), minsTram = new Float32Array(N);
 const posGeo = new Float32Array(N * 2), posNow = new Float32Array(N * 2), posTram = new Float32Array(N * 2);
 const cur = new Float32Array(N * 2), from = new Float32Array(N * 2), to = new Float32Array(N * 2);
 let tw = 1, fromT = 0, toT = 0, curT = 0;   // 모프 진행도 / time-amount
+/* 모프가 한 덩어리로 툭 움직이지 않고 출발지에서 바깥으로 번져 나가게 한다.
+   delayN[i] = 출발지에서의 거리(0~1) = 그 점이 늦게 출발하는 몫. */
+const delayN = new Float32Array(N);
+const MORPH_MS = 1300;      // 전체 길이(프레임 수가 아니라 실제 경과 시간으로 센다)
+const STAGGER = 0.3;        // 가장 먼 점이 늦게 출발하는 비율
+let twStart = 0;
+/* 5차 smootherstep — 시작·끝에서 가속도까지 0 이라 cubic 보다 멈춤이 매끈하다. */
+const smooth = t => t * t * t * (t * (t * 6 - 15) + 10);
 let stats = null, hover = null;
+/* 시간지도에서는 출발지 가까운 역들이 한 점으로 몰려 흰 점이 떡진다. 화면에서
+   겹치는 점은 솎아 내되, 솎는 순서가 중요하다 — 환승역, 1호선, 트램 순으로
+   자리를 먼저 잡게 해서 노선의 골격이 남게 한다. 같은 등급 안에서는 정거장
+   순서를 그대로 따르므로, 촘촘한 구간에서는 한 칸 걸러 하나씩 살아남는다.
+   확대하면 화면 간격이 벌어지니 저절로 다시 나타난다. */
+const dotRank = s => (s.line === '1호선·트램' ? 0 : s.line === '1호선' ? 1 : 2);
+const DOT_ORDER = ALL.map((_, i) => i).sort((a, b) => dotRank(ALL[a]) - dotRank(ALL[b]));
+const dotA = new Float32Array(ALL.length).fill(1);   // 점마다의 보임 정도(0~1)
+/* 지금까지는 아무것도 안 바뀌어도 매 프레임 지도를 통째로 다시 그렸다(정점 수천 개 ·
+   DPR 2). 폰에서는 그 자체로 열이 올라 시트를 끌 때도 프레임이 밀린다. 바뀐 게 있을
+   때만 그린다 — 모프 중 · 확대 중 · 출발지가 바뀐 직후 · 마우스가 정거장에 얹혔을 때. */
+let dirty = true;
 const GN = NC;
 const gridXY = new Float32Array(GN * 2);    // 그리드 지리 좌표(모프 없음)
 const gridCut = new Float32Array(GN);       // 트램으로 줄어드는 시간(분)
@@ -284,6 +308,7 @@ function recompute() {
     const b = timePos(PTS[i][0], PTS[i][1], minsTram[i], o);
     posTram[i * 2] = b.x; posTram[i * 2 + 1] = b.y;
   }
+  makeDelays();
   for (let i = 0; i < GN; i++) {
     const g = geoFit(D.grid[i]); gridXY[i * 2] = g.x; gridXY[i * 2 + 1] = g.y;
     gridCut[i] = Math.max(0, tt('now', origin, i) - tt('tram', origin, i));
@@ -326,11 +351,22 @@ function target(m, sc) {
 function tweenTo(m, sc) {
   const t = target(m, sc);
   from.set(tw >= 1 ? (curReady ? cur : posGeo) : cur);
-  to.set(t); fromT = curT; toT = (m === 'geo' || m === 'diff') ? 0 : 1; tw = 0;
+  to.set(t); fromT = curT; toT = (m === 'geo' || m === 'diff') ? 0 : 1;
+  tw = 0; twStart = performance.now();
+}
+/** 출발지에서의 거리순 지연표. posGeo 가 채워진 뒤(=recompute 안)에 다시 만든다. */
+function makeDelays() {
+  const ox = posGeo[(NODE_S + origin) * 2], oy = posGeo[(NODE_S + origin) * 2 + 1];
+  let mx = 1e-6;
+  for (let i = 0; i < N; i++) {
+    const d = Math.hypot(posGeo[i * 2] - ox, posGeo[i * 2 + 1] - oy);
+    delayN[i] = d; if (d > mx) mx = d;
+  }
+  for (let i = 0; i < N; i++) delayN[i] /= mx;
 }
 let curReady = false;
 function settle() { const t = target(mode, scen); cur.set(t); from.set(t); to.set(t); tw = 1;
-  curT = toT = fromT = (mode === 'geo' || mode === 'diff') ? 0 : 1; curReady = true; }
+  curT = toT = fromT = (mode === 'geo' || mode === 'diff') ? 0 : 1; curReady = true; dirty = true; }
 
 /* ---------- 렌더 ---------- */
 /* 포스터 A1 최종본(Figma DDA_design 214:3169 "진짜Final") 팔레트 — css/style.css 의 :root 와 같은 값 */
@@ -476,38 +512,96 @@ function draw() {
   ctx.fillStyle = 'rgba(11,58,38,.62)'; ctx.font = '700 15px Pretendard, sans-serif'; ctx.textAlign = 'center';
   for (let i = 0; i < D.guLabels.length; i++) { const [x, y] = P(GU_S + i); ctx.fillText(D.guLabels[i].name, x, y); }
 
-  // 정거장
-  for (let i = 0; i < ALL.length; i++) {
-    const s = ALL[i], [x, y] = P(NODE_S + i);
-    if (isTramOnly(s) && scen === 'now') continue;
+  // 정거장 — 화면에서 겹치는 점은 솎아 낸다(위 DOT_ORDER 의 우선순위대로)
+  const rr = VW >= 821 ? 3.2 : 4.2;
+  /* 얼마나 벌릴지는 시간지도로 간 정도(curT)에 비례한다. 지리 지도에서 점이
+     구슬처럼 이어 붙는 건 포스터의 생김새라 건드리지 않고(거의 겹친 것만 솎음),
+     시간지도로 갈수록 떡지므로 사이를 벌려 솎아 낸다. */
+  const gapK = -0.6 + 4.6 * curT;
+  const taken = [[...P(NODE_S + origin), rr * (1.6 + 1.8 * curT)]];   // 출발지 핀 둘레
+  const vis = new Uint8Array(ALL.length);
+  const free = (x, y, rad) => {
+    for (let k = 0; k < taken.length; k++) {
+      const m = taken[k][2] + rad + gapK;
+      if ((taken[k][0] - x) ** 2 + (taken[k][1] - y) ** 2 < m * m) return false;
+    }
+    return true;
+  };
+  for (const i of DOT_ORDER) {
     if (i === origin) continue;                 // 출발지는 핀으로 그린다
-    const isH = hover === i;
-    const rr = VW >= 821 ? 3.2 : 4.2;
-    ctx.beginPath(); ctx.arc(x, y, isH ? rr + 2.5 : rr, 0, 7);
+    if (isTramOnly(ALL[i]) && scen === 'now') continue;
+    const [x, y] = P(NODE_S + i);
+    if (hover !== i && !free(x, y, rr)) continue;
+    taken.push([x, y, rr]); vis[i] = 1;
+  }
+  /* 모프 중에는 살아남는 점이 프레임마다 바뀐다. 그냥 끄고 켜면 깜빡이므로
+     짧게 녹아들고 녹아 나가게 한다. 아직 변하는 중이면 다음 프레임을 요청한다. */
+  let fading = false;
+  for (let i = 0; i < ALL.length; i++) {
+    const t = vis[i] ? 1 : 0, a = dotA[i];
+    if (Math.abs(t - a) > 0.015) { dotA[i] = a + (t - a) * 0.2; fading = true; }
+    else dotA[i] = t;
+  }
+  if (fading) dirty = true;
+  for (let i = 0; i < ALL.length; i++) {
+    const a = dotA[i];
+    if (a < 0.02 || i === origin) continue;
+    if (isTramOnly(ALL[i]) && scen === 'now') continue;
+    const [x, y] = P(NODE_S + i), isH = hover === i;
+    ctx.globalAlpha = a;
+    ctx.beginPath(); ctx.arc(x, y, isH ? rr + 2.5 : rr * (0.55 + 0.45 * a), 0, 7);
     ctx.fillStyle = '#fff';
     ctx.fill();
     ctx.lineWidth = 1.5;
-    ctx.strokeStyle = isTramOnly(s) ? C.orangeDeep : C.green;
+    ctx.strokeStyle = isTramOnly(ALL[i]) ? C.orangeDeep : C.green;
     ctx.stroke();
   }
+  ctx.globalAlpha = 1;
 
   // 시간 링 (채움 위) — 포스터처럼 초록 점선 + 오른쪽 끝에서 아래로 내린 리더선·라벨
   if (curT > 0.02 && mode !== 'diff') {
     ctx.save(); ctx.globalAlpha = curT * .85;
     const ccx = BOX.cx * view.s + view.x, ccy = BOX.cy * view.s + view.y;
-    const baseY = BOX.cy + BOX.h / 2 - 6, x1 = BOX.cx + BOX.w / 2;
+    /* 지도는 화면 밖까지 흘러도 눈금은 읽혀야 한다. 상자 바닥이 아니라
+       '보이는 화면 바닥(모드바 위)'을 기준으로 두 줄을 올려 붙인다. */
+    let baseY = BOX.cy + BOX.h / 2 - (VW >= 821 ? 6 : 20);
+    let x1 = BOX.cx + BOX.w / 2;
+    if (VW < 821) {
+      const seg = document.querySelector('.seg');
+      if (seg) baseY = Math.min(baseY, seg.getBoundingClientRect().top - 16);
+      x1 = Math.min(x1, VW - 10);
+    }
     ctx.strokeStyle = 'rgba(7,105,64,.55)'; ctx.lineWidth = 1.1;
     ctx.setLineDash([5, 7]);
     for (const m of RINGS) { const r = radial(m) * view.s;
       ctx.beginPath(); ctx.arc(ccx, ccy, r, 0, 7); ctx.stroke(); }
     ctx.setLineDash([]);
-    ctx.font = '700 11.5px Pretendard, sans-serif'; ctx.textAlign = 'center';
-    for (const m of RINGS) {
-      const x = ccx + radial(m) * view.s;
+    /* 라벨 자리. 반지름이 0.68제곱이라 바깥 링일수록 간격이 좁아져서, 한 줄에 다 늘어
+       놓으면 '90분120분150분'처럼 글자끼리 붙는다. 한 칸씩 위아래로 어긋나게 두어
+       줄당 간격을 두 배로 벌리고, 그래도 닿으면 그 라벨은 거른다.
+       바탕을 한 겹 깔아 두는 건 라벨이 역 동그라미·노선 위에 얹힐 때가 있어서다. */
+    ctx.font = '700 11.5px Pretendard, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    const rowY = [baseY, baseY - 16], rowEnd = [-1e9, -1e9], put = [];
+    for (let k = 0; k < RINGS.length; k++) {
+      const m = RINGS[k], x = ccx + radial(m) * view.s;
       if (x > x1 - 14 || x < BOX.cx - BOX.w / 2 || ccy > baseY - 24) continue;
+      const label = m + '분', w = ctx.measureText(label).width, row = k % 2;
+      if (x - w / 2 < rowEnd[row] + 7) continue;
+      rowEnd[row] = x + w / 2;
+      put.push({ x, y: rowY[row], label, w });
+    }
+    for (const p of put) {
       ctx.strokeStyle = 'rgba(7,105,64,.4)'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(x, ccy); ctx.lineTo(x, baseY - 14); ctx.stroke();
-      ctx.fillStyle = 'rgba(7,105,64,.85)'; ctx.fillText(m + '분', x, baseY);
+      ctx.beginPath(); ctx.moveTo(p.x, ccy); ctx.lineTo(p.x, p.y - 12); ctx.stroke();
+    }
+    for (const p of put) {
+      ctx.fillStyle = 'rgba(241,241,241,.84)';
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(p.x - p.w / 2 - 4, p.y - 11, p.w + 8, 15, 7)
+                    : ctx.rect(p.x - p.w / 2 - 4, p.y - 11, p.w + 8, 15);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(7,105,64,.85)'; ctx.fillText(p.label, p.x, p.y);
     }
     ctx.restore();
   }
@@ -559,45 +653,161 @@ function drawDiff() {
   for (let i = 0; i < D.guLabels.length; i++) { const [x, y] = P(GU_S + i); ctx.fillText(D.guLabels[i].name, x, y); }
 }
 
-function step() {
+function step(now) {
   if (tw < 1) {
-    tw = Math.min(1, tw + 16 / 1400);
-    const e = easeInOut(tw);
-    for (let i = 0; i < N * 2; i++) cur[i] = from[i] + (to[i] - from[i]) * e;
-    curT = fromT + (toT - fromT) * e;
+    dirty = true;
+    /* 프레임 수로 세면(16/1400) 120Hz 화면에서 전환이 두 배 빨라지고, 프레임이
+       빠질 때마다 끊긴다. 실제 경과 시간으로 센다. */
+    tw = Math.min(1, (now - twStart) / MORPH_MS);
+    const span = 1 - STAGGER;
+    for (let i = 0; i < N; i++) {
+      let t = (tw - delayN[i] * STAGGER) / span;
+      t = t <= 0 ? 0 : t >= 1 ? 1 : smooth(t);
+      const a = i * 2, b = a + 1;
+      cur[a] = from[a] + (to[a] - from[a]) * t;
+      cur[b] = from[b] + (to[b] - from[b]) * t;
+    }
+    curT = fromT + (toT - fromT) * smooth(tw);
     curReady = true;
   }
-  draw();
+  if (dirty) { dirty = false; draw(); }   // draw 안에서 다시 세울 수 있다(점 페이드)
   requestAnimationFrame(step);
 }
 
 /* ---------- 리사이즈 ---------- */
 function resize() {
+  if ((scrollY || 0) < 3) measureShell();     // 바가 펴져 있을 때의 '진짜 보이는 높이'
   DPR = Math.min(devicePixelRatio || 1, 2);
   VW = cvs.clientWidth; VH = cvs.clientHeight;
   cvs.width = Math.round(VW * DPR); cvs.height = Math.round(VH * DPR);
+  fitTitle();                     // 제목 크기가 정해져야 머리글이 차지하는 높이가 나온다
   layout(); fitGeo(); recompute(); settle();
+  clampView();
+  placeSegThumb(false);
 }
-addEventListener('resize', resize);
+/** 모바일 제목은 한 줄로 폭을 꽉 채운다. 글자 수가 고정이니 폭에 맞춰 크기만 바꾸면
+ *  되는데, 글꼴·자간이 em 비례라 '지금 폭 : 목표 폭' 한 번이면 거의 맞고 두 번이면 딱 맞다.
+ *  Range 로 재는 건 줄이 넘쳐도 실제 글자 폭이 그대로 나오기 때문이다. */
+function fitTitle() {
+  const h = document.querySelector('#head h1'); if (!h) return;
+  if (VW >= 821) { h.style.fontSize = ''; return; }
+  const box = h.clientWidth; if (!box) return;
+  const r = document.createRange();
+  for (let i = 0; i < 2; i++) {
+    r.selectNodeContents(h);
+    const w = r.getBoundingClientRect().width; if (!w) return;
+    const now = parseFloat(getComputedStyle(h).fontSize);
+    h.style.fontSize = Math.max(16, Math.min(96, now * box / w)) + 'px';
+  }
+}
+/* 셸 높이를 눈금이 아니라 실측으로 잡는다. svh 가 기기·사파리 버전마다 하단바를
+   얼마나 빼는지 미묘하게 달라서, 바 밑으로 UI 가 조금씩 깔리는 일이 생긴다.
+   visualViewport.height 는 '지금 실제로 보이는 높이'다. 바가 펴져 있는 상태
+   (= 맨 위)에서만 재서 못 박아 두면, 스크롤 중 바가 접혀도 셸이 흔들리지 않는다.
+   페이지 자체가 확대돼 있으면(scale>1) 그 값은 축소된 것이라 쓰지 않는다. */
+/* ?shell=754 로 '하단바가 먹는 높이'를 흉내 낼 수 있다 — 데스크톱 브라우저에는
+   사파리 바가 없어서 그냥은 재현이 안 된다. */
+const DBG_SHELL = +((location.search.match(/shell=(\d+)/) || [])[1] || 0);
+function measureShell() {
+  if (VW >= 821 && !DBG_SHELL) { document.documentElement.style.removeProperty('--shell-px'); return false; }
+  const vv = window.visualViewport;
+  if (vv && vv.scale > 1.02) return false;
+  const h = DBG_SHELL || Math.round(vv ? vv.height : innerHeight);
+  if (h < 320) return false;
+  const now = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--shell-px'));
+  if (Math.abs((now || 0) - h) < 2) return false;
+  document.documentElement.style.setProperty('--shell-px', h + 'px');
+  return true;
+}
+/* iOS 사파리는 주소창이 접히고 펴질 때마다 resize 를 쏟아낸다(dvh 라 높이가 실제로
+   바뀐다). 전환 중에 끊기지 않도록, 크기가 정말 달라졌을 때만 다시 계산한다. */
+let rsTimer = 0;
+function scheduleResize() {
+  clearTimeout(rsTimer);
+  rsTimer = setTimeout(() => {
+    if (scrollY < 3) measureShell();        // 바가 펴져 있을 때만 셸을 다시 잰다
+    if (cvs.clientWidth === VW && cvs.clientHeight === VH) return;
+    resize();
+  }, 120);
+}
+addEventListener('resize', scheduleResize);
+window.visualViewport && visualViewport.addEventListener('resize', scheduleResize);
 
 /* ---------- 인터랙션 ---------- */
 const tip = document.getElementById('tip');
+const railR = document.getElementById('railR');
 let drag = null, moved = 0;
 const rel = e => { const r = cvs.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+const isPhone = () => VW < 821;
+/** 모바일은 '확대까지만'이다. 지도를 끌어 옮길 수단이 없으니 배율이 1 아래로 내려가지
+ *  않게 하고, 확대 중 화면이 지도 밖으로 빠지지 않도록 평행이동을 안쪽으로 묶는다. */
+function clampView() {
+  if (!isPhone()) return;
+  view.s = Math.max(1, Math.min(6, view.s));
+  if (view.s <= 1.0001) { view.x = 0; view.y = 0; return; }
+  view.x = Math.min(0, Math.max(VW * (1 - view.s), view.x));
+  view.y = Math.min(0, Math.max(VH * (1 - view.s), view.y));
+}
 function pick(px, py) {
   const HIT = VW >= 821 ? 16 : 22; let best = -1, bd = HIT * HIT;
   for (let i = 0; i < ALL.length; i++) {
     if (isTramOnly(ALL[i]) && scen === 'now') continue;
+    if (dotA[i] < 0.5) continue;        // 솎여서 안 보이는 점은 집히지도 않는다
     const [x, y] = P(NODE_S + i); const d = (x - px) ** 2 + (y - py) ** 2;
     if (d < bd) { bd = d; best = i; }
   }
   return best;
 }
-cvs.addEventListener('pointerdown', e => { cvs.setPointerCapture(e.pointerId); drag = rel(e); moved = 0; });
+
+/* ---- 모바일 제스처 ----
+   한 손가락은 지도가 받지 않는다. #stage 의 touch-action:pan-y 가 그대로 페이지
+   스크롤로 넘겨, 아래 숫자 판이 올라온다 — 관성도 고무줄도 브라우저 몫이다.
+   여기서 받는 건 두 손가락 확대와, 움직임 없는 탭(정거장 선택 · 두 번이면 원위치)뿐. */
+const touches = new Map();
+let pinch = null, tapAt = null, lastTap = 0;
+function startPinch() {
+  const [a, b] = [...touches.values()];
+  tapAt = null;
+  pinch = { d0: Math.max(28, Math.hypot(a.x - b.x, a.y - b.y)),
+            mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2,
+            s0: view.s, x0: view.x, y0: view.y };
+}
+/* iOS 는 두 손가락을 페이지 확대로 먼저 가져간다. 지도 위에서만 막는다. */
+for (const t of ['gesturestart', 'gesturechange', 'gestureend'])
+  cvs.addEventListener(t, e => e.preventDefault());
+cvs.addEventListener('pointerdown', e => {
+  tip.hidden = true; hover = null;
+  if (isPhone() && e.pointerType !== 'mouse') {
+    touches.set(e.pointerId, rel(e));
+    if (touches.size >= 2) { cvs.setPointerCapture(e.pointerId); startPinch(); return; }
+    const p = touches.get(e.pointerId);
+    tapAt = { id: e.pointerId, x: p.x, y: p.y, moved: 0 };
+    return;
+  }
+  cvs.setPointerCapture(e.pointerId); drag = rel(e); moved = 0;
+});
 cvs.addEventListener('pointermove', e => {
   const p = rel(e);
-  if (drag) { view.x += p.x - drag.x; view.y += p.y - drag.y; moved += Math.abs(p.x - drag.x) + Math.abs(p.y - drag.y); drag = p; tip.hidden = true; return; }
-  const h = pick(p.x, p.y); hover = h < 0 ? null : h;
+  if (touches.has(e.pointerId)) {
+    touches.set(e.pointerId, p);
+    if (pinch && touches.size >= 2) {
+      const [a, b] = [...touches.values()];
+      const ns = Math.max(1, Math.min(6, pinch.s0 * (Math.hypot(a.x - b.x, a.y - b.y) / pinch.d0)));
+      const k = ns / pinch.s0;
+      view.s = ns;
+      view.x = pinch.mx - (pinch.mx - pinch.x0) * k;
+      view.y = pinch.my - (pinch.my - pinch.y0) * k;
+      clampView(); dirty = true;
+      return;
+    }
+    if (tapAt && tapAt.id === e.pointerId)
+      tapAt.moved = Math.max(tapAt.moved, Math.abs(p.x - tapAt.x) + Math.abs(p.y - tapAt.y));
+    return;
+  }
+  if (drag) { view.x += p.x - drag.x; view.y += p.y - drag.y; moved += Math.abs(p.x - drag.x) + Math.abs(p.y - drag.y); drag = p; tip.hidden = true; dirty = true; return; }
+  if (e.pointerType && e.pointerType !== 'mouse') { tip.hidden = true; if (hover !== null) { hover = null; dirty = true; } return; }
+  const h = pick(p.x, p.y); const prev = hover; hover = h < 0 ? null : h;
+  if (hover !== prev) dirty = true;
   cvs.style.cursor = h < 0 ? 'grab' : 'pointer';
   if (h >= 0) {
     const s = ALL[h];
@@ -612,17 +822,44 @@ cvs.addEventListener('pointermove', e => {
   } else tip.hidden = true;
 });
 function up(e) {
+  if (touches.has(e.pointerId)) {
+    touches.delete(e.pointerId);
+    if (pinch) { if (touches.size < 2) { pinch = null; touches.clear(); } return; }
+    if (tapAt && tapAt.id === e.pointerId) {
+      if (tapAt.moved < 9) {                     // 스크롤이 아니라 탭이었을 때만
+        const h = pick(tapAt.x, tapAt.y), t = performance.now();
+        if (h >= 0) { lastTap = 0; setOrigin(h); }
+        else if (t - lastTap < 320) {            // 빈 곳을 두 번 치면 원위치
+          lastTap = 0; view = { s: 1, x: 0, y: 0 }; dirty = true;
+        } else lastTap = t;
+      }
+      tapAt = null;
+    }
+    return;
+  }
   if (drag && moved < 5) { const h = pick(drag.x, drag.y); if (h >= 0) setOrigin(h); }
   drag = null; cvs.style.cursor = 'grab';
 }
-cvs.addEventListener('pointerup', up); cvs.addEventListener('pointercancel', up);
-cvs.addEventListener('pointerleave', () => { if (!drag) { tip.hidden = true; hover = null; } });
+cvs.addEventListener('pointerup', up);
+cvs.addEventListener('pointercancel', e => {
+  // 페이지가 스크롤로 가져가면 여기로 온다 — 탭도 확대도 아니었던 것으로 친다.
+  if (touches.has(e.pointerId)) {
+    touches.delete(e.pointerId);
+    if (tapAt && tapAt.id === e.pointerId) tapAt = null;
+    if (touches.size < 2) { pinch = null; }
+    return;
+  }
+  up(e);
+});
+cvs.addEventListener('pointerleave', () => { if (!drag) { tip.hidden = true; hover = null; dirty = true; } });
+addEventListener('blur', () => { tip.hidden = true; if (hover !== null) { hover = null; dirty = true; } });
 cvs.addEventListener('wheel', e => {
   e.preventDefault(); const p = rel(e); const f = e.deltaY < 0 ? 1.12 : 1 / 1.12;
   const ns = Math.max(.5, Math.min(6, view.s * f)); const k = ns / view.s;
   view.x = p.x - (p.x - view.x) * k; view.y = p.y - (p.y - view.y) * k; view.s = ns;
+  clampView(); dirty = true;
 }, { passive: false });
-cvs.addEventListener('dblclick', () => { view = { s: 1, x: 0, y: 0 }; });
+cvs.addEventListener('dblclick', () => { view = { s: 1, x: 0, y: 0 }; dirty = true; });
 
 function setOrigin(i) {
   origin = i; recompute();
@@ -652,9 +889,34 @@ function paintStats() {
       <td class="${d > 0.5 ? 'cut' : 'flat'}">${d > 0.5 ? '−' + Math.round(d) + '분' : '—'}</td></tr>`;
   }).join('');
 }
+/* 모드 알약. 버튼마다 글자 수가 달라 폭이 제각각이라, 지금 켜진 버튼의 자리와 폭을
+   재어 CSS 변수로 넘긴다(전환은 CSS 가 한다). animate=false 면 리사이즈처럼
+   '소리 없이' 자리만 맞춘다. */
+const segEl = document.querySelector('.seg');
+const segThumb = document.querySelector('.seg-thumb');
+function placeSegThumb(animate = true) {
+  if (!segEl || !segThumb) return;
+  const b = segEl.querySelector('[data-mode].on'); if (!b) return;
+  if (!animate) segThumb.classList.add('quiet');
+  // 줄이 바뀌어도(좁은 화면에서 2행으로 접힐 때) 따라가도록 y·높이까지 재어 넘긴다.
+  segThumb.style.setProperty('--seg-x', b.offsetLeft + 'px');
+  segThumb.style.setProperty('--seg-y', b.offsetTop + 'px');
+  segThumb.style.setProperty('--seg-w', b.offsetWidth + 'px');
+  segThumb.style.setProperty('--seg-h', b.offsetHeight + 'px');
+  segEl.dataset.sel = b.dataset.mode;
+  if (!animate) { void segThumb.offsetWidth; segThumb.classList.remove('quiet'); }
+}
+function markSeg() {
+  placeSegThumb(true);
+  if (!segThumb) return;
+  segThumb.classList.remove('hop');
+  void segThumb.offsetWidth;                  // 리플로우 한 번 — 매번 처음부터 돌게
+  segThumb.classList.add('hop');
+}
 document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('[data-mode]').forEach(x => x.classList.remove('on'));
   b.classList.add('on');
+  markSeg();
   const v = b.dataset.mode;
   if (v === 'geo' || v === 'diff') mode = v; else { mode = 'time'; scen = v; }
   document.body.dataset.scen = scen;
@@ -665,7 +927,7 @@ document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click'
     scen === 'tram' ? '라임 = 실제 크기 대전 · 금색 = 트램 후 시간지도 · 점선 = 현재'
                     : '라임 = 실제 크기 대전 · 올리브 = 현재 시간지도 · 점선 = 트램 후';
   tweenTo(mode === 'diff' ? 'geo' : mode, scen);
-  if (window.innerWidth < 821) document.body.dataset.sheet = '0';
+  if (window.innerWidth < 821 && scrollY > 4) scrollTo({ top: 0, behavior: 'smooth' });
 }));
 document.getElementById('originPick').addEventListener('change', e => {
   setOrigin(Number(e.target.value));
@@ -684,14 +946,87 @@ document.getElementById('originPick').addEventListener('change', e => {
   sel.value = String(origin);
 })();
 
-const sheetBtn = document.getElementById('sheetBtn');
-sheetBtn && sheetBtn.addEventListener('click', () => { document.body.dataset.sheet = '1'; });
-const sheetClose = document.getElementById('sheetClose');
-sheetClose && sheetClose.addEventListener('click', () => { document.body.dataset.sheet = '0'; });
+/* 숫자 판으로 내려가고 올라오는 건 전부 페이지 스크롤이다. 여기서 하는 일은
+   둘뿐 — 얼마나 내려왔는지를 지도 위 막(--sheet-p)에 넘기고, 유도 손잡이를
+   한 번 쓴 뒤에는 그만 흔드는 것. 손잡이를 톡 치면 부드럽게 데려다 준다. */
+const scrollShell = () => Math.max(1, (document.documentElement.clientHeight || innerHeight) - 46);
+let scrollTick = 0;
+function onScroll() {
+  if (scrollTick) return;
+  scrollTick = requestAnimationFrame(() => {
+    scrollTick = 0;
+    const p = Math.max(0, Math.min(1, (scrollY || 0) / scrollShell()));
+    document.body.style.setProperty('--sheet-p', p.toFixed(3));
+    if (p > 0.02) document.body.dataset.scrolled = '1';
+    else delete document.body.dataset.scrolled;
+    if (p > 0.6) document.body.dataset.cued = '1';
+    syncThemeColor();
+  });
+}
+addEventListener('scroll', onScroll, { passive: true });
+
+/* 사파리 바는 제 색이 없다 — 뒤에 깔린 걸 비추거나 theme-color 를 쓴다. 바가
+   덮는 띠를 종이색으로 깔아 두고(css #app::after), theme-color 도 지금 그 자리에
+   실제로 깔린 색으로 맞춘다. 숫자 판이 올라오면 판 색, 아니면 종이색. */
+const themeMeta = document.querySelector('meta[name="theme-color"]');
+function syncThemeColor() {
+  if (!themeMeta) return;
+  const p = parseFloat(getComputedStyle(document.body).getPropertyValue('--sheet-p')) || 0;
+  const col = p > 0.5 ? '#eef0ef' : '#f1f1f1';
+  if (themeMeta.content !== col) themeMeta.content = col;
+}
+
+/* ---- 진단(?debug) ----
+   폰에서 실제로 어떤 숫자가 나오는지 화면에 찍는다. 안전영역·svh·실측 높이가
+   서로 다르면 그게 바 밑으로 깔리는 원인이다. 붉은 점선이 셸의 위아래 끝이다. */
+if (location.search.includes('debug')) {
+  const box = document.createElement('div'); box.id = 'dbg';
+  const lt = document.createElement('div'); lt.id = 'dbgLineT';
+  const lb = document.createElement('div'); lb.id = 'dbgLineB';
+  document.body.append(box, lt, lb);
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:absolute;visibility:hidden;top:0;left:0;' +
+    'height:100svh;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)';
+  document.body.appendChild(probe);
+  const p2 = document.createElement('div');
+  p2.style.cssText = 'position:absolute;visibility:hidden;top:0;left:0;height:100dvh;width:1px';
+  document.body.appendChild(p2);
+  const p3 = document.createElement('div');
+  p3.style.cssText = 'position:absolute;visibility:hidden;top:0;left:0;height:100lvh;width:1px';
+  document.body.appendChild(p3);
+  const n = v => Math.round(v);
+  setInterval(() => {
+    const vv = window.visualViewport, cs = getComputedStyle(probe);
+    const app = document.getElementById('app').getBoundingClientRect();
+    const seg = document.querySelector('.seg').getBoundingClientRect();
+    const h1 = document.querySelector('#head h1').getBoundingClientRect();
+    const rr = document.getElementById('railR').getBoundingClientRect();
+    lt.style.top = app.top + 'px'; lb.style.top = app.bottom + 'px';
+    box.textContent = [
+      `screen ${screen.width}x${screen.height} dpr${devicePixelRatio}`,
+      `inner ${innerWidth}x${innerHeight}  client ${document.documentElement.clientHeight}`,
+      `vv h${vv ? n(vv.height) : '-'} top${vv ? n(vv.offsetTop) : '-'} scale${vv ? vv.scale.toFixed(2) : '-'}`,
+      `svh ${n(parseFloat(cs.height))}  dvh ${n(p2.getBoundingClientRect().height)}  lvh ${n(p3.getBoundingClientRect().height)}`,
+      `safe T${n(parseFloat(cs.paddingTop))} B${n(parseFloat(cs.paddingBottom))}`,
+      `shell-px ${getComputedStyle(document.documentElement).getPropertyValue('--shell-px') || '(none)'}`,
+      `#app y ${n(app.top)}..${n(app.bottom)} (h ${n(app.height)})`,
+      `title ${n(h1.top)}..${n(h1.bottom)}  seg ${n(seg.top)}..${n(seg.bottom)}`,
+      `peek ${n(rr.top)}  scrollY ${n(scrollY)}/${n(document.documentElement.scrollHeight)}`,
+      `map box T${n(BOX.cy - BOX.h / 2)} B${n(BOX.cy + BOX.h / 2)}`,
+    ].join('\n');
+  }, 250);
+}
+const sheetGrab = document.getElementById('sheetGrab');
+sheetGrab && sheetGrab.addEventListener('click', () => {
+  document.body.dataset.cued = '1';
+  scrollTo({ top: scrollShell(), behavior: 'smooth' });
+});
 addEventListener('orientationchange', () => setTimeout(resize, 220));
-document.body.dataset.sheet = '0';
 
 resize();
+placeSegThumb(false);
+// 글꼴이 바뀌면 제목 폭도 머리글 높이도 달라진다 — 지도 자리까지 다시 잡는다
+document.fonts && document.fonts.ready.then(() => resize());
 document.getElementById('originName').textContent = ALL[origin].name;
 document.getElementById('originLine').textContent = ALL[origin].line;
 document.body.dataset.scen = scen;

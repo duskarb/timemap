@@ -1,0 +1,17 @@
+{
+  "name": "대전, 생각보다 가깝네? — 시간 지도",
+  "short_name": "대전 시간지도",
+  "description": "거리가 아니라 이동 시간으로 그린 대전. 트램이 들어오면 도시가 얼마나 줄어드는지 봅니다.",
+  "lang": "ko",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f1f1f1",
+  "theme_color": "#f1f1f1",
+  "icons": [
+    { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "assets/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
